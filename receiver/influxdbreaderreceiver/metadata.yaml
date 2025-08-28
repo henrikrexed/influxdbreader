@@ -1,0 +1,9 @@
+type: influxdbreader
+
+status:
+  class: receiver
+  stability:
+    alpha: [metrics]
+  distributions: [contrib]
+  codeowners:
+    active: [henrikrexed]
