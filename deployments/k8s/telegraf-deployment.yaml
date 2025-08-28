@@ -1,0 +1,158 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: telegraf
+  labels:
+    name: telegraf
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegraf-config
+  namespace: telegraf
+data:
+  telegraf.conf: |
+    # Global agent configuration
+    [agent]
+      interval = "10s"
+      round_interval = true
+      metric_batch_size = 1000
+      metric_buffer_limit = 10000
+      collection_jitter = "0s"
+      flush_interval = "10s"
+      flush_jitter = "0s"
+      precision = ""
+      hostname = ""
+      omit_hostname = false
+
+    # CPU metrics
+    [[inputs.cpu]]
+      percpu = true
+      totalcpu = true
+      collect_cpu_time = false
+      report_active = false
+
+    # Memory metrics
+    [[inputs.mem]]
+
+    # Disk metrics
+    [[inputs.disk]]
+      ignore_fs = ["tmpfs", "devtmpfs", "devfs", "iso9660", "overlay", "aufs", "squashfs"]
+
+    # System metrics
+    [[inputs.system]]
+
+    # Network metrics
+    [[inputs.net]]
+
+    # InfluxDB v1.x output
+    [[outputs.influxdb]]
+      urls = ["http://influxdb-service.influxdb.svc.cluster.local:8086"]
+      database = "telegraf"
+      username = "admin"
+      password = "password"
+      retention_policy = ""
+      write_consistency = "any"
+      timeout = "5s"
+      user_agent = "telegraf"
+      udp_payload = "9KB"
+      tls_ca = ""
+      tls_cert = ""
+      tls_key = ""
+      insecure_skip_verify = false
+      http_proxy = ""
+      http_proxy_override = false
+      http_headers = {}
+      content_encoding = "gzip"
+      skip_database_creation = false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegraf
+  namespace: telegraf
+  labels:
+    app: telegraf
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telegraf
+  template:
+    metadata:
+      labels:
+        app: telegraf
+    spec:
+      containers:
+        - name: telegraf
+          image: telegraf:1.25-alpine
+          ports:
+            - name: http
+              containerPort: 8125
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/telegraf
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: docker
+              mountPath: /var/run/docker.sock
+              readOnly: true
+          env:
+            - name: HOST_PROC
+              value: /host/proc
+            - name: HOST_SYS
+              value: /host/sys
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8125
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8125
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: telegraf-config
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: docker
+          hostPath:
+            path: /var/run/docker.sock
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telegraf
+  namespace: telegraf
+  labels:
+    app: telegraf
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8125
+      targetPort: 8125
+      protocol: TCP
+  selector:
+    app: telegraf

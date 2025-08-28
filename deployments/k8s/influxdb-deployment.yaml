@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: influxdb
+  labels:
+    name: influxdb
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: influxdb-pvc
+  namespace: influxdb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: influxdb-config
+  namespace: influxdb
+data:
+  influxdb.conf: |
+    [meta]
+      dir = "/var/lib/influxdb/meta"
+    
+    [data]
+      dir = "/var/lib/influxdb/data"
+      wal-dir = "/var/lib/influxdb/wal"
+      series-id-set-cache-size = 100
+    
+    [http]
+      enabled = true
+      bind-address = ":8086"
+      auth-enabled = true
+      log-enabled = true
+      write-tracing = false
+      pprof-enabled = false
+      https-enabled = false
+      https-certificate = "/etc/ssl/influxdb.pem"
+    
+    [admin]
+      enabled = true
+      bind-address = ":8083"
+      https-enabled = false
+      https-certificate = "/etc/ssl/influxdb.pem"
+    
+    [monitor]
+      store-enabled = true
+      store-database = "_internal"
+      store-interval = "10s"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb
+  namespace: influxdb
+  labels:
+    app: influxdb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: influxdb
+  template:
+    metadata:
+      labels:
+        app: influxdb
+    spec:
+      containers:
+        - name: influxdb
+          image: influxdb:1.8-alpine
+          ports:
+            - name: http
+              containerPort: 8086
+              protocol: TCP
+            - name: admin
+              containerPort: 8083
+              protocol: TCP
+          env:
+            - name: INFLUXDB_DB
+              value: "telegraf"
+            - name: INFLUXDB_ADMIN_USER
+              value: "admin"
+            - name: INFLUXDB_ADMIN_PASSWORD
+              value: "password"
+            - name: INFLUXDB_HTTP_AUTH_ENABLED
+              value: "true"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/influxdb
+            - name: data
+              mountPath: /var/lib/influxdb
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8086
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8086
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: influxdb-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: influxdb-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb-service
+  namespace: influxdb
+  labels:
+    app: influxdb
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8086
+      targetPort: 8086
+      protocol: TCP
+    - name: admin
+      port: 8083
+      targetPort: 8083
+      protocol: TCP
+  selector:
+    app: influxdb
+---
+# Service to expose InfluxDB to the otel-collector namespace
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb-service-external
+  namespace: otel-collector
+  labels:
+    app: influxdb
+spec:
+  type: ExternalName
+  externalName: influxdb-service.influxdb.svc.cluster.local
+  ports:
+    - name: http
+      port: 8086
+      protocol: TCP

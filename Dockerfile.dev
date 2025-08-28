@@ -1,0 +1,71 @@
+# Stage 1: Build the custom collector with OCB
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    make \
+    curl \
+    tar \
+    ca-certificates
+
+WORKDIR /workspace
+
+# Install OCB (OpenTelemetry Collector Builder)
+RUN go install go.opentelemetry.io/collector/cmd/builder@latest
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the collector using OCB
+RUN builder --config ocb.yaml
+
+# Development stage with debugging tools
+FROM alpine:3.18
+
+# Install ca-certificates and debugging tools
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata \
+    wget \
+    curl \
+    htop \
+    procps
+
+# Create non-root user
+RUN addgroup -g 1000 otel && \
+    adduser -u 1000 -G otel -s /bin/sh -D otel
+
+# Copy the binary from builder stage
+COPY --from=builder /workspace/dist/otelcol-influxdbreader /otelcol-influxdbreader
+
+# Set ownership
+RUN chown otel:otel /otelcol-influxdbreader
+
+# Create config directory
+RUN mkdir -p /etc/otelcol && \
+    chown otel:otel /etc/otelcol
+
+# Switch to non-root user
+USER otel
+
+# Expose ports
+EXPOSE 4317 4318 13133 1777 55679 8888
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:13133/ || exit 1
+
+# Set entrypoint
+ENTRYPOINT ["/otelcol-influxdbreader"]
+CMD ["--config", "/etc/otelcol/config.yaml"]

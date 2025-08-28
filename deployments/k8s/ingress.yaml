@@ -1,0 +1,63 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: otel-collector-ingress
+  namespace: otel-collector
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: otel-collector.local
+      http:
+        paths:
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: otel-collector
+                port:
+                  number: 13133
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: otel-collector
+                port:
+                  number: 8888
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: influxdb-ingress
+  namespace: influxdb
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: influxdb-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: influxdb.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: influxdb-service
+                port:
+                  number: 8086
+---
+# Secret for InfluxDB basic auth
+apiVersion: v1
+kind: Secret
+metadata:
+  name: influxdb-auth
+  namespace: influxdb
+type: Opaque
+data:
+  auth: YWRtaW46cGFzc3dvcmQ=  # admin:password base64 encoded

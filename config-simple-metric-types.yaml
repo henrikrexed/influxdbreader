@@ -1,0 +1,60 @@
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "localhost:8086"
+      protocol: "http"
+      authentication:
+        username: "admin"
+        password: "password"
+    database: "telegraf"
+    interval: "30s"
+    auto_discover: true
+    
+    # Simplified metric type configuration
+    metric_types:
+      # Enable automatic detection based on naming patterns
+      auto_detect: true
+      
+      # Override specific measurements if needed
+      overrides:
+        memory_free: "gauge"
+        cpu_usage: "gauge"
+        http_requests_total: "counter"
+      
+      # Default type when auto-detection fails
+      default_type: "gauge"
+
+processors:
+  # Convert cumulative counters to deltas (if needed)
+  cumulativetodelta:
+    include:
+      metric_names:
+        - "cpu_usage"
+        - "http_requests"
+  
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.name
+        value: "influxdb-reader"
+        action: upsert
+  
+  # Batch processing
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  otlp:
+    endpoint: "localhost:4317"
+    tls:
+      insecure: true
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    metrics:
+      receivers: [influxdbreader]
+      processors: [batch, resource, cumulativetodelta]
+      exporters: [otlp, debug]

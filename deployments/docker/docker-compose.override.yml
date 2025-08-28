@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  # Override the influxdbreader service for development
+  influxdbreader:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: influxdbreader-dev
+    environment:
+      - OTEL_LOG_LEVEL=debug
+      - OTEL_TRACES_SAMPLER=always_on
+    volumes:
+      - ./config-simple.yaml:/etc/otelcol/config.yaml:ro
+      - ./config-full.yaml:/etc/otelcol/config-full.yaml:ro
+      - ./testdata:/etc/otelcol/testdata:ro
+    command: ["--config", "/etc/otelcol/config.yaml"]
+    # Enable interactive mode for development
+    stdin_open: true
+    tty: true
+
+  # Add development tools
+  dev-tools:
+    image: alpine:3.18
+    container_name: dev-tools
+    depends_on:
+      - influxdbreader
+    volumes:
+      - ./scripts:/scripts:ro
+    command: ["tail", "-f", "/dev/null"]
+    networks:
+      - otel-network

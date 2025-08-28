@@ -1,0 +1,246 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otel-collector
+  labels:
+    name: otel-collector
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: otel-collector
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: otel-collector
+data:
+  config.yaml: |
+    receivers:
+      # Custom InfluxDB reader receiver
+      influxdbreader:
+        endpoint:
+          address: "influxdb-service:8086"
+          protocol: "http"
+          authentication:
+            username: "admin"
+            password: "password"
+        database: "telegraf"
+        interval: "30s"
+        auto_discover: true
+        use_v2_api: false
+        timeout: "30s"
+      
+      # OTLP receiver for receiving telemetry data
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+      
+      # Prometheus receiver for scraping metrics
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'otel-collector'
+              static_configs:
+                - targets: ['localhost:8888']
+      
+      # File log receiver for reading log files
+      filelog:
+        include: [ "/var/log/*.log" ]
+        start_at: end
+        operators:
+          - type: regex_parser
+            regex: '^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?P<severity>\w+) (?P<message>.*)$'
+            timestamp:
+              parse_from: time
+              layout: '2006-01-02 15:04:05'
+
+    processors:
+      # Batch processor for efficient data transmission
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+      
+      # Memory limiter to prevent OOM
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 1500
+      
+      # Transform processor for data manipulation
+      transform:
+        metric_statements:
+          - context: metric
+            statements:
+              - set(attributes["service.name"], "influxdb-reader")
+      
+      # Cumulative to delta processor for metrics
+      cumulativetodelta:
+        include:
+          metrics:
+            - "cpu_usage"
+            - "memory_usage"
+      
+      # Filter processor to exclude unwanted data
+      filter:
+        metrics:
+          include:
+            match_type: regexp
+            metric_names:
+              - ".*"
+      
+      # Resource processor to add resource attributes
+      resource:
+        attributes:
+          - key: service.name
+            value: "influxdb-reader"
+            action: upsert
+          - key: service.version
+            value: "v1.0.0"
+            action: upsert
+
+    exporters:
+      # OTLP exporter for sending to backend
+      otlp:
+        endpoint: "otlp-backend:4317"
+        tls:
+          insecure: true
+      
+      # OTLP HTTP exporter as alternative
+      otlphttp:
+        endpoint: "http://otlp-backend:4318"
+      
+      # Debug exporter for development/testing
+      debug:
+        verbosity: detailed
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [influxdbreader, otlp, prometheus]
+          processors: [memory_limiter, batch, transform, cumulativetodelta, filter, resource]
+          exporters: [otlp, otlphttp, debug]
+        logs:
+          receivers: [filelog, otlp]
+          processors: [memory_limiter, batch, filter, resource]
+          exporters: [otlp, otlphttp, debug]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, filter, resource]
+          exporters: [otlp, otlphttp, debug]
+      
+      telemetry:
+        logs:
+          level: "info"
+        metrics:
+          level: "basic"
+        traces:
+          level: "basic"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: otel-collector
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: influxdbreader:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: prometheus
+              containerPort: 8888
+              protocol: TCP
+            - name: healthcheck
+              containerPort: 13133
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+            - name: logs
+              mountPath: /var/log
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+        - name: logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: otel-collector
+  labels:
+    app: otel-collector
+spec:
+  type: ClusterIP
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: prometheus
+      port: 8888
+      targetPort: 8888
+      protocol: TCP
+    - name: healthcheck
+      port: 13133
+      targetPort: 13133
+      protocol: TCP
+  selector:
+    app: otel-collector

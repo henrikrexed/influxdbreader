@@ -1,0 +1,31 @@
+# Test configuration for InfluxDB 1.x
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "localhost:8086"
+      protocol: "http"
+      authentication:
+        username: "testuser"
+        password: "testpass"
+    database: "testdb"
+    interval: "10s"
+    auto_discover: true  # Automatically discover all measurements
+    timeout: "30s"
+    insecure: false
+    use_v2_api: false
+
+processors:
+  batch:
+    timeout: "1s"
+    send_batch_size: 1024
+
+exporters:
+  logging:
+    loglevel: "debug"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [influxdbreader]
+      processors: [batch]
+      exporters: [logging]

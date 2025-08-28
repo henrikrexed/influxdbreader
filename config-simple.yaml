@@ -1,0 +1,56 @@
+receivers:
+  # InfluxDB reader receiver
+  influxdbreader:
+    endpoint:
+      address: "localhost:8086"
+      protocol: "http"
+      authentication:
+        username: "admin"
+        password: "password"
+    database: "testdb"
+    interval: "30s"
+    auto_discover: true
+
+processors:
+  # Batch processor for efficient processing
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1500
+
+  # Resource processor to add resource attributes
+  resource:
+    attributes:
+      - key: environment
+        value: "production"
+        action: upsert
+
+exporters:
+  # OTLP exporter for sending to OTLP endpoints
+  otlp:
+    endpoint: "localhost:4317"
+    tls:
+      insecure: true
+
+  # Debug exporter for development and debugging
+  debug:
+    verbosity: detailed
+
+extensions:
+  # Health check extension
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+service:
+  extensions: [health_check]
+  
+  pipelines:
+    # Metrics pipeline with InfluxDB reader
+    metrics:
+      receivers: [influxdbreader]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp, debug]

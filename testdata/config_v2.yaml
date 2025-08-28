@@ -1,0 +1,32 @@
+# Test configuration for InfluxDB 2.x
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "localhost:8086"
+      protocol: "https"
+      authentication:
+        token: "your-influxdb-token"
+        organization: "test-org"
+        bucket: "test-bucket"
+    database: "test-bucket"
+    interval: "10s"
+    auto_discover: true  # Automatically discover all measurements
+    timeout: "30s"
+    insecure: true
+    use_v2_api: true
+
+processors:
+  batch:
+    timeout: "1s"
+    send_batch_size: 1024
+
+exporters:
+  logging:
+    loglevel: "debug"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [influxdbreader]
+      processors: [batch]
+      exporters: [logging]

@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  # InfluxDB 1.x for testing
+  influxdb1:
+    image: influxdb:1.8-alpine
+    container_name: influxdb1
+    ports:
+      - "8086:8086"
+      - "8083:8083"
+    environment:
+      - INFLUXDB_DB=telegraf
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=password
+      - INFLUXDB_HTTP_AUTH_ENABLED=true
+    volumes:
+      - influxdb1_data:/var/lib/influxdb
+      - ./scripts/init-influxdb1.sh:/docker-entrypoint-initdb.d/init-influxdb1.sh:ro
+    networks:
+      - otel-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # InfluxDB 2.x for testing
+  influxdb2:
+    image: influxdb:2.7-alpine
+    container_name: influxdb2
+    ports:
+      - "8087:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password
+      - DOCKER_INFLUXDB_INIT_ORG=myorg
+      - DOCKER_INFLUXDB_INIT_BUCKET=telegraf
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+    volumes:
+      - influxdb2_data:/var/lib/influxdb2
+    networks:
+      - otel-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Telegraf for generating sample metrics
+  telegraf:
+    image: telegraf:1.25-alpine
+    container_name: telegraf
+    ports:
+      - "8125:8125"
+    volumes:
+      - ./scripts/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    environment:
+      - HOST_PROC=/host/proc
+      - HOST_SYS=/host/sys
+    networks:
+      - otel-network
+    depends_on:
+      influxdb1:
+        condition: service_healthy
+      influxdb2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # OpenTelemetry Collector with our custom InfluxDB reader receiver
+  influxdbreader:
+    image: influxdbreader:latest
+    container_name: influxdbreader
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Prometheus metrics
+      - "13133:13133" # Health check
+    volumes:
+      - ./config-simple.yaml:/etc/otelcol/config.yaml:ro
+      - ./testdata:/testdata:ro
+    networks:
+      - otel-network
+    depends_on:
+      influxdb1:
+        condition: service_healthy
+      influxdb2:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:13133/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Jaeger for distributed tracing visualization
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686"  # Web UI
+      - "14268:14268"  # HTTP collector
+      - "14250:14250"  # gRPC collector
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - otel-network
+    restart: unless-stopped
+
+  # Prometheus for metrics visualization
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - otel-network
+    restart: unless-stopped
+
+  # Grafana for metrics and logs visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - otel-network
+    restart: unless-stopped
+
+volumes:
+  influxdb1_data:
+    driver: local
+  influxdb2_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  otel-network:
+    driver: bridge

@@ -1,0 +1,45 @@
+name: otelcol-influxdbreader
+output_path: ./dist
+go:
+  version: "1.24"
+  modules:
+    - github.com/henrikrexed/influxdbreader
+
+# Build configuration
+build:
+  target_os: ["linux"]
+  target_arch: ["amd64", "arm64"]
+
+# Receivers
+receivers:
+  # Custom InfluxDB reader receiver (part of our main module)
+  - gomod: github.com/henrikrexed/influxdbreader v0.0.0
+  
+  # Standard OpenTelemetry receivers
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.133.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.133.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver v0.133.0
+
+
+
+# Processors
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.133.0
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.133.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.133.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/cumulativetodeltaprocessor v0.133.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.133.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.133.0
+
+# Exporters
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlpexporter v0.133.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.133.0
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.133.0
+
+# Extensions
+extensions: []
+
+# Replace directives for local development
+replaces: 
+  - github.com/henrikrexed/influxdbreader => /workspace

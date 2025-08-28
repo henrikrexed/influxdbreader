@@ -1,0 +1,169 @@
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "localhost:8086"
+      protocol: "http"
+      authentication:
+        username: "admin"
+        password: "password"
+    database: "telegraf"
+    interval: "30s"
+    auto_discover: true
+    timeout: "30s"
+    use_v2_api: false
+    
+    # Metric type mapping configuration
+    metric_type_mapping:
+      # Default metric type when no mapping is found
+      default_type: "gauge"
+      
+      # Specific measurement rules
+      measurement_rules:
+        - measurement: "cpu_usage"
+          metric_type: "gauge"
+          is_cumulative: false
+          is_monotonic: false
+        - measurement: "memory_free"
+          metric_type: "gauge"
+          is_cumulative: false
+          is_monotonic: false
+        - measurement: "temperature"
+          metric_type: "gauge"
+          is_cumulative: false
+          is_monotonic: false
+        - measurement: "http_requests_total"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+      
+      # Field name pattern rules (regex)
+      field_rules:
+        # Counter patterns (end with _total, _count, _bytes)
+        - field_pattern: ".*_total$"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+        - field_pattern: ".*_count$"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+        - field_pattern: ".*_bytes$"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+        # Gauge patterns (descriptive names)
+        - field_pattern: ".*_usage$"
+          metric_type: "gauge"
+          is_cumulative: false
+          is_monotonic: false
+        - field_pattern: ".*_free$"
+          metric_type: "gauge"
+          is_cumulative: false
+          is_monotonic: false
+        - field_pattern: ".*_temperature$"
+          metric_type: "gauge"
+          is_cumulative: false
+          is_monotonic: false
+        # Histogram patterns (end with _bucket, _sum, _quantile)
+        - field_pattern: ".*_bucket$"
+          metric_type: "histogram"
+          is_cumulative: false
+          is_monotonic: false
+        - field_pattern: ".*_sum$"
+          metric_type: "histogram"
+          is_cumulative: false
+          is_monotonic: false
+        - field_pattern: ".*_quantile$"
+          metric_type: "histogram"
+          is_cumulative: false
+          is_monotonic: false
+      
+      # Measurement name pattern rules (regex)
+      pattern_rules:
+        # Counter patterns
+        - measurement_pattern: ".*_total$"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+        - measurement_pattern: ".*_count$"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+        - measurement_pattern: ".*_bytes$"
+          metric_type: "counter"
+          is_cumulative: true
+          is_monotonic: true
+        # Histogram patterns
+        - measurement_pattern: ".*_histogram$"
+          metric_type: "histogram"
+          is_cumulative: false
+          is_monotonic: false
+        - measurement_pattern: ".*_bucket$"
+          metric_type: "histogram"
+          is_cumulative: false
+          is_monotonic: false
+
+processors:
+  # Convert cumulative counters to deltas (if needed)
+  cumulativetodelta:
+    include:
+      metric_names:
+        - "cpu_usage"
+        - "http_requests"
+        - "disk_io"
+  
+  # Filter to only process specific metrics
+  filter:
+    metrics:
+      include:
+        match_type: regexp
+        metric_names:
+          - ".*_total$"
+          - ".*_rate$"
+          - ".*_gauge$"
+  
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.name
+        value: "influxdb-reader"
+        action: upsert
+      - key: data_source
+        value: "influxdb"
+        action: upsert
+  
+  # Batch processing
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  
+  # Memory management
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1500
+
+exporters:
+  # OTLP exporter for sending to OTLP endpoints
+  otlp:
+    endpoint: "localhost:4317"
+    tls:
+      insecure: true
+
+  # Debug exporter for development and debugging
+  debug:
+    verbosity: detailed
+
+extensions:
+  # Health check extension
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+service:
+  extensions: [health_check]
+  
+  pipelines:
+    # Metrics pipeline with InfluxDB reader
+    metrics:
+      receivers: [influxdbreader]
+      processors: [memory_limiter, batch, resource, filter, cumulativetodelta]
+      exporters: [otlp, debug]
