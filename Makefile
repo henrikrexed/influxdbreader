@@ -2,7 +2,7 @@
 
 # Variables
 BINARY_NAME := otelcol-influxdbreader
-DOCKER_IMAGE := influxdbreader
+DOCKER_IMAGE := hrexed/collector-influxdbreader
 DOCKER_TAG := latest
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
@@ -114,6 +114,7 @@ ocb-build:
 docker-build:
 	@echo "Building $(CONTAINER_RUNTIME) image with OCB for platform $(PLATFORM)..."
 	@echo "Version: $(VERSION)"
+	@echo "Image: $(DOCKER_IMAGE)"
 	$(CONTAINER_RUNTIME) build --load -t $(DOCKER_IMAGE):$(DOCKER_TAG) -t $(DOCKER_IMAGE):$(VERSION) .
 	@echo "$(CONTAINER_RUNTIME) image built: $(DOCKER_IMAGE):$(DOCKER_TAG) and $(DOCKER_IMAGE):$(VERSION) for $(PLATFORM)"
 
