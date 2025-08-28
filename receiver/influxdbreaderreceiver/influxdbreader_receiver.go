@@ -230,15 +230,40 @@ func (r *influxdbReaderReceiver) fetchV2Metrics(ctx context.Context) pmetric.Met
 		metric := scopeMetrics.Metrics().AppendEmpty()
 		metric.SetName(record.Measurement())
 
-		// Set metric type based on field type
+		// Determine metric type based on configuration
+		metricTypeInfo := r.determineMetricType(record.Measurement(), record.Field())
+
+		// Set metric type based on field type and configuration
 		if record.Value() != nil {
 			switch v := record.Value().(type) {
 			case float64:
-				dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
-				dp.SetDoubleValue(v)
+				switch metricTypeInfo.Type {
+				case MetricTypeCounter:
+					dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+					dp.SetDoubleValue(v)
+					metric.Sum().SetIsMonotonic(true)
+				case MetricTypeHistogram:
+					dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+					dp.SetSum(v)
+					dp.SetCount(1)
+				default: // MetricTypeGauge or unknown
+					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+					dp.SetDoubleValue(v)
+				}
 			case int64:
-				dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
-				dp.SetIntValue(v)
+				switch metricTypeInfo.Type {
+				case MetricTypeCounter:
+					dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+					dp.SetIntValue(v)
+					metric.Sum().SetIsMonotonic(true)
+				case MetricTypeHistogram:
+					dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+					dp.SetSum(float64(v))
+					dp.SetCount(1)
+				default: // MetricTypeGauge or unknown
+					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+					dp.SetIntValue(v)
+				}
 			case bool:
 				dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
 				if v {
@@ -331,18 +356,55 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 
 					// Parse value
 					if value, ok := point[1].(float64); ok {
-						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
-						dp.SetDoubleValue(value)
+						// Determine metric type based on configuration
+						metricTypeInfo := r.determineMetricType(series.Name, "value")
+
+						// Set metric type based on configuration
+						switch metricTypeInfo.Type {
+						case MetricTypeCounter:
+							dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+							dp.SetDoubleValue(value)
+							metric.Sum().SetIsMonotonic(true)
+						case MetricTypeHistogram:
+							dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+							dp.SetSum(value)
+							dp.SetCount(1)
+						default: // MetricTypeGauge or unknown
+							dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+							dp.SetDoubleValue(value)
+						}
 
 						if !timestamp.IsZero() {
-							dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+							// Set timestamp based on metric type
+							switch metricTypeInfo.Type {
+							case MetricTypeCounter:
+								dp := metric.Sum().DataPoints().At(0)
+								dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+							case MetricTypeHistogram:
+								dp := metric.Histogram().DataPoints().At(0)
+								dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+							default:
+								dp := metric.Gauge().DataPoints().At(0)
+								dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+							}
 						}
 
 						// Set labels from tags
 						for i, column := range series.Columns {
 							if i >= 2 && i < len(point) && column != "time" && column != "value" {
 								if val, ok := point[i].(string); ok {
-									dp.Attributes().PutStr(column, val)
+									// Set attributes based on metric type
+									switch metricTypeInfo.Type {
+									case MetricTypeCounter:
+										dp := metric.Sum().DataPoints().At(0)
+										dp.Attributes().PutStr(column, val)
+									case MetricTypeHistogram:
+										dp := metric.Histogram().DataPoints().At(0)
+										dp.Attributes().PutStr(column, val)
+									default:
+										dp := metric.Gauge().DataPoints().At(0)
+										dp.Attributes().PutStr(column, val)
+									}
 								}
 							}
 						}
@@ -395,15 +457,40 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 			metric := scopeMetrics.Metrics().AppendEmpty()
 			metric.SetName(record.Measurement())
 
-			// Set metric type based on field type
+			// Determine metric type based on configuration
+			metricTypeInfo := r.determineMetricType(record.Measurement(), record.Field())
+
+			// Set metric type based on field type and configuration
 			if record.Value() != nil {
 				switch v := record.Value().(type) {
 				case float64:
-					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
-					dp.SetDoubleValue(v)
+					switch metricTypeInfo.Type {
+					case MetricTypeCounter:
+						dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+						dp.SetDoubleValue(v)
+						metric.Sum().SetIsMonotonic(true)
+					case MetricTypeHistogram:
+						dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+						dp.SetSum(v)
+						dp.SetCount(1)
+					default: // MetricTypeGauge or unknown
+						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+						dp.SetDoubleValue(v)
+					}
 				case int64:
-					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
-					dp.SetIntValue(v)
+					switch metricTypeInfo.Type {
+					case MetricTypeCounter:
+						dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+						dp.SetIntValue(v)
+						metric.Sum().SetIsMonotonic(true)
+					case MetricTypeHistogram:
+						dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+						dp.SetSum(float64(v))
+						dp.SetCount(1)
+					default: // MetricTypeGauge or unknown
+						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+						dp.SetIntValue(v)
+					}
 				case bool:
 					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
 					if v {
@@ -417,16 +504,34 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 			// Set timestamp
 			timestamp := record.Time()
 			if !timestamp.IsZero() {
-				dp := metric.Gauge().DataPoints().At(0)
-				dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+				switch metricTypeInfo.Type {
+				case MetricTypeCounter:
+					dp := metric.Sum().DataPoints().At(0)
+					dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+				case MetricTypeHistogram:
+					dp := metric.Histogram().DataPoints().At(0)
+					dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+				default:
+					dp := metric.Gauge().DataPoints().At(0)
+					dp.SetTimestamp(pcommon.Timestamp(timestamp.UnixNano()))
+				}
 			}
 
 			// Set labels from tags
 			if record.Values() != nil {
-				dp := metric.Gauge().DataPoints().At(0)
 				for k, v := range record.Values() {
 					if k != "_time" && k != "_value" && k != "_field" && k != "_measurement" {
-						dp.Attributes().PutStr(k, fmt.Sprintf("%v", v))
+						switch metricTypeInfo.Type {
+						case MetricTypeCounter:
+							dp := metric.Sum().DataPoints().At(0)
+							dp.Attributes().PutStr(k, fmt.Sprintf("%v", v))
+						case MetricTypeHistogram:
+							dp := metric.Histogram().DataPoints().At(0)
+							dp.Attributes().PutStr(k, fmt.Sprintf("%v", v))
+						default:
+							dp := metric.Gauge().DataPoints().At(0)
+							dp.Attributes().PutStr(k, fmt.Sprintf("%v", v))
+						}
 					}
 				}
 			}

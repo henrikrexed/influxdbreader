@@ -70,12 +70,21 @@ func (r *influxdbReaderReceiver) determineMetricType(measurement, field string) 
 	defaultType := MetricTypeGauge
 	if r.config.MetricTypeMapping.DefaultType != "" {
 		defaultType = MetricType(r.config.MetricTypeMapping.DefaultType)
+	} else {
+		// Use intelligent detection based on measurement and field names
+		if isLikelyCounter(measurement) || isLikelyCounter(field) {
+			defaultType = MetricTypeCounter
+		} else if isLikelyHistogram(measurement) || isLikelyHistogram(field) {
+			defaultType = MetricTypeHistogram
+		} else if isLikelyGauge(measurement) || isLikelyGauge(field) {
+			defaultType = MetricTypeGauge
+		}
 	}
 
 	return MetricTypeInfo{
 		Type:         defaultType,
-		IsCumulative: false,
-		IsMonotonic:  false,
+		IsCumulative: defaultType == MetricTypeCounter,
+		IsMonotonic:  defaultType == MetricTypeCounter,
 	}
 }
 
