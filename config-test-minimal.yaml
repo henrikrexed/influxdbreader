@@ -1,0 +1,35 @@
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "10.0.0.146:8086"
+      protocol: "http"
+      authentication:
+        username: "${INFLUXUSER}"
+        password: "${INFLUXPWD}"
+    database: "mondb"
+    interval: "30s"
+    auto_discover: true
+    timeout: "30s"
+    use_v2_api: false
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines: 
+    metrics/influx:
+      receivers: [influxdbreader]
+      processors: []  # No processors at all
+      exporters: [debug]  # Only debug exporter
+  
+  telemetry:
+    logs:
+      level: debug  # Enable debug logging
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '${MY_POD_IP}'
+                port: 8888

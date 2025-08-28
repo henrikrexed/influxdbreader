@@ -66,17 +66,19 @@ func (r *influxdbReaderReceiver) determineMetricType(measurement, field string) 
 		}
 	}
 
-	// Use default type
+	// Use default type - be conservative and default to gauge for InfluxDB data
 	defaultType := MetricTypeGauge
 	if r.config.MetricTypeMapping.DefaultType != "" {
 		defaultType = MetricType(r.config.MetricTypeMapping.DefaultType)
 	} else {
-		// Use intelligent detection based on measurement and field names
-		if isLikelyCounter(measurement) || isLikelyCounter(field) {
+		// For InfluxDB data, be more conservative about counter detection
+		// Only classify as counter if we're very confident it's cumulative
+		if isDefinitelyCounter(measurement) || isDefinitelyCounter(field) {
 			defaultType = MetricTypeCounter
 		} else if isLikelyHistogram(measurement) || isLikelyHistogram(field) {
 			defaultType = MetricTypeHistogram
-		} else if isLikelyGauge(measurement) || isLikelyGauge(field) {
+		} else {
+			// Default to gauge for most InfluxDB measurements
 			defaultType = MetricTypeGauge
 		}
 	}
@@ -120,7 +122,8 @@ func createDefaultMetricTypeMapping() *MetricTypeMappingConfig {
 			},
 		},
 		FieldRules: []FieldRule{
-			// Counter field patterns (end with _total, _count, _bytes)
+			// Counter field patterns (end with _total, _count)
+			// Note: Removed _bytes pattern as it's too aggressive for InfluxDB data
 			{
 				FieldPattern: ".*_total$",
 				MetricType:   "counter",
@@ -129,12 +132,6 @@ func createDefaultMetricTypeMapping() *MetricTypeMappingConfig {
 			},
 			{
 				FieldPattern: ".*_count$",
-				MetricType:   "counter",
-				IsCumulative: true,
-				IsMonotonic:  true,
-			},
-			{
-				FieldPattern: ".*_bytes$",
 				MetricType:   "counter",
 				IsCumulative: true,
 				IsMonotonic:  true,
@@ -180,6 +177,7 @@ func createDefaultMetricTypeMapping() *MetricTypeMappingConfig {
 		},
 		PatternRules: []PatternRule{
 			// Counter measurement patterns
+			// Note: Removed _bytes pattern as it's too aggressive for InfluxDB data
 			{
 				MeasurementPattern: ".*_total$",
 				MetricType:         "counter",
@@ -188,12 +186,6 @@ func createDefaultMetricTypeMapping() *MetricTypeMappingConfig {
 			},
 			{
 				MeasurementPattern: ".*_count$",
-				MetricType:         "counter",
-				IsCumulative:       true,
-				IsMonotonic:        true,
-			},
-			{
-				MeasurementPattern: ".*_bytes$",
 				MetricType:         "counter",
 				IsCumulative:       true,
 				IsMonotonic:        true,
@@ -273,6 +265,26 @@ func isLikelyCounter(name string) bool {
 	}
 
 	for _, pattern := range counterPatterns {
+		if strings.Contains(name, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isDefinitelyCounter checks if a measurement/field name is definitely a counter
+// This is more conservative than isLikelyCounter and only matches clear cumulative patterns
+func isDefinitelyCounter(name string) bool {
+	name = strings.ToLower(name)
+	// Only match very specific patterns that are almost certainly cumulative counters
+	definiteCounterPatterns := []string{
+		"_requests_total", "_errors_total", "_operations_total", "_events_total",
+		"total_requests", "total_errors", "total_operations", "total_events",
+		"_packets_total", "_connections_total", "_sessions_total",
+	}
+
+	for _, pattern := range definiteCounterPatterns {
 		if strings.Contains(name, pattern) {
 			return true
 		}

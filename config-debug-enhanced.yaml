@@ -1,0 +1,56 @@
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "10.0.0.146:8086"
+      protocol: "http"
+      authentication:
+        username: "${INFLUXUSER}"
+        password: "${INFLUXPWD}"
+    database: "mondb"
+    interval: "30s"
+    auto_discover: true
+    timeout: "30s"
+    use_v2_api: false
+
+processors:
+  batch:
+    send_batch_max_size: 1000
+    timeout: 30s
+    send_batch_size: 800
+  
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 70
+    spike_limit_percentage: 30
+  
+  resource:
+    attributes:
+      - key: k8s.cluster.name
+        value: ${CLUSTERNAME}
+        action: insert
+
+exporters:
+  debug:
+    verbosity: detailed
+  otlphttp:
+    endpoint: ${DT_ENDPOINT}/api/v2/otlp
+    headers:
+      Authorization: "Api-Token ${DT_API_TOKEN}"
+
+service:
+  pipelines: 
+    metrics/influx:
+      receivers: [influxdbreader]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, otlphttp]
+  
+  telemetry:
+    logs:
+      level: debug  # Increased logging level
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '${MY_POD_IP}'
+                port: 8888

@@ -66,4 +66,5 @@ COPY --from=builder /workspace/dist/builder ./otelcol-influxdbreader
 
 EXPOSE 4317 4318 13133 1777 55679 8888
 
-ENTRYPOINT ["./otelcol-influxdbreader", "--config", "/etc/otelcol/config.yaml"]
+ENTRYPOINT ["./otelcol-influxdbreader"]
+CMD ["--config", "/conf/config.yaml"]

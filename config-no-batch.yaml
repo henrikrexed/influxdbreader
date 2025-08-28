@@ -1,0 +1,29 @@
+receivers:
+  influxdbreader:
+    endpoint:
+      address: "10.0.0.146:8086"
+      protocol: "http"
+      authentication:
+        username: "test"
+        password: "deded"
+    database: "mondb"
+    interval: "10s"
+    auto_discover: true  # Automatically discover all measurements
+    timeout: "30s"
+    insecure: false
+    use_v2_api: false
+
+exporters:
+  debug:
+    verbosity: detailed
+  otlp:
+    endpoint: "localhost:4317"
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [influxdbreader]
+      processors: []  # No batch processor
+      exporters: [debug, otlp]
