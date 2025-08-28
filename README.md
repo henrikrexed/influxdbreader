@@ -461,64 +461,6 @@ receivers:
           is_monotonic: false
 ```
 
-processors:
-  # Convert cumulative counters to deltas (if needed)
-  cumulativetodelta:
-    include:
-      metric_names:
-        - "cpu_usage"
-        - "http_requests"
-  
-  # Filter to only process specific metrics
-  filter:
-    metrics:
-      include:
-        match_type: regexp
-        metric_names:
-          - ".*_total$"    # Cumulative counters
-          - ".*_rate$"     # Rate metrics
-          - ".*_gauge$"    # Gauge metrics
-  
-  # Add resource attributes
-  resource:
-    attributes:
-      - key: service.name
-        value: "influxdb-reader"
-        action: upsert
-      - key: data_source
-        value: "influxdb"
-        action: upsert
-  
-  # Batch processing
-  batch:
-    timeout: 1s
-    send_batch_size: 1024
-  
-  # Memory management
-  memory_limiter:
-    check_interval: 1s
-    limit_mib: 1500
-
-exporters:
-  otlp:
-    endpoint: "localhost:4317"
-    tls:
-      insecure: true
-  debug:
-    verbosity: detailed
-
-extensions:
-  health_check:
-    endpoint: "0.0.0.0:13133"
-
-service:
-  extensions: [health_check]
-  pipelines:
-    metrics:
-      receivers: [influxdbreader]
-      processors: [memory_limiter, batch, resource]
-      exporters: [otlp, debug]
-```
 
 #### Full Configuration with All Components
 See `config-full.yaml` for a complete example with:
