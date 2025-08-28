@@ -10,6 +10,7 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # Container runtime (docker or podman)
 CONTAINER_RUNTIME ?= docker
+CONTAINER_ENGINE ?= $(CONTAINER_RUNTIME)
 
 # Platform variables
 PLATFORM ?= linux/amd64
@@ -112,11 +113,15 @@ ocb-build:
 
 # Build container image using OCB (single platform)
 docker-build:
-	@echo "Building $(CONTAINER_RUNTIME) image with OCB for platform $(PLATFORM)..."
+	@echo "Building $(CONTAINER_ENGINE) image with OCB for platform $(PLATFORM)..."
 	@echo "Version: $(VERSION)"
 	@echo "Image: $(DOCKER_IMAGE)"
-	$(CONTAINER_RUNTIME) build --load -t $(DOCKER_IMAGE):$(DOCKER_TAG) -t $(DOCKER_IMAGE):$(VERSION) .
-	@echo "$(CONTAINER_RUNTIME) image built: $(DOCKER_IMAGE):$(DOCKER_TAG) and $(DOCKER_IMAGE):$(VERSION) for $(PLATFORM)"
+	$(CONTAINER_ENGINE) build --load \
+		--build-arg TARGETOS=linux \
+		--build-arg TARGETARCH=$(shell echo $(PLATFORM) | sed 's/linux\///') \
+		--build-arg BUILDPLATFORM=$(PLATFORM) \
+		-t $(DOCKER_IMAGE):$(DOCKER_TAG) -t $(DOCKER_IMAGE):$(VERSION) .
+	@echo "$(CONTAINER_ENGINE) image built: $(DOCKER_IMAGE):$(DOCKER_TAG) and $(DOCKER_IMAGE):$(VERSION) for $(PLATFORM)"
 
 # Build container image using OCB (multi-platform)
 docker-build-multi:
@@ -130,6 +135,24 @@ docker-build-multi:
 		$(CONTAINER_RUNTIME) build --platform $(BUILDX_PLATFORMS) -t $(DOCKER_IMAGE):$(DOCKER_TAG) -t $(DOCKER_IMAGE):$(VERSION) .; \
 	fi
 	@echo "Multi-platform $(CONTAINER_RUNTIME) image built: $(DOCKER_IMAGE):$(DOCKER_TAG) and $(DOCKER_IMAGE):$(VERSION) for $(BUILDX_PLATFORMS)"
+
+# Build container image using Docker Buildx for specific platform
+docker-buildx:
+	@echo "Building $(CONTAINER_RUNTIME) image with Buildx for platform $(PLATFORM)..."
+	@echo "Version: $(VERSION)"
+	@echo "Image: $(DOCKER_IMAGE)"
+	@if [ "$(CONTAINER_RUNTIME)" = "docker" ]; then \
+		$(CONTAINER_RUNTIME) buildx build --platform $(PLATFORM) \
+			--build-arg TARGETOS=linux \
+			--build-arg TARGETARCH=$(shell echo $(PLATFORM) | sed 's/linux\///') \
+			--build-arg BUILDPLATFORM=$(PLATFORM) \
+			-t $(DOCKER_IMAGE):$(DOCKER_TAG) -t $(DOCKER_IMAGE):$(VERSION) \
+			--load .; \
+	else \
+		echo "Buildx is only available with Docker, not Podman"; \
+		exit 1; \
+	fi
+	@echo "$(CONTAINER_RUNTIME) image built: $(DOCKER_IMAGE):$(DOCKER_TAG) and $(DOCKER_IMAGE):$(VERSION) for $(PLATFORM)"
 
 # Build development container image
 docker-build-dev:
@@ -162,6 +185,17 @@ build-version-podman:
 # Platform-specific build targets
 docker-build-amd64:
 	@$(MAKE) docker-build PLATFORM=linux/amd64 PLATFORM_SHORT=amd64
+
+docker-build-amd64-simple:
+	@echo "Building amd64 image using pre-built binary..."
+	@echo "Version: $(VERSION)"
+	@echo "Image: $(DOCKER_IMAGE)"
+	@mkdir -p bin
+	GOOS=linux GOARCH=amd64 go build -o bin/otelcol-influxdbreader-amd64 ./receiver/influxdbreaderreceiver
+	$(CONTAINER_RUNTIME) build --load --platform linux/amd64 \
+		-t $(DOCKER_IMAGE):$(DOCKER_TAG)-amd64 -t $(DOCKER_IMAGE):$(VERSION)-amd64 \
+		-f Dockerfile.amd64 .
+	@echo "$(CONTAINER_RUNTIME) image built: $(DOCKER_IMAGE):$(DOCKER_TAG)-amd64 and $(DOCKER_IMAGE):$(VERSION)-amd64 for linux/amd64"
 
 docker-build-arm64:
 	@$(MAKE) docker-build PLATFORM=linux/arm64 PLATFORM_SHORT=arm64
