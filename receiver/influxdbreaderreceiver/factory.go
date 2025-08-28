@@ -48,5 +48,5 @@ func createMetricsReceiver(
 	consumer consumer.Metrics,
 ) (receiver.Metrics, error) {
 	config := cfg.(*Config)
-	return newInfluxDBReaderReceiver(config, consumer, set.Logger), nil
+	return newInfluxDBReaderReceiver(config, consumer, set.TelemetrySettings), nil
 }

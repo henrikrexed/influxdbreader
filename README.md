@@ -488,16 +488,28 @@ When `auto_discover: true` (default):
 
 #### 3. Data Retrieval Strategy
 For each discovered measurement:
-- **Latest Data**: Fetches the most recent data point to minimize data transfer
-- **InfluxDB 1.x**: `SELECT * FROM "measurement_name" ORDER BY time DESC LIMIT 1`
-- **InfluxDB 2.x**: `from(bucket:"bucket") |> range(start: -1h) |> filter(fn: (r) => r["_measurement"] == "measurement_name") |> last()`
+- **Incremental Polling**: Uses time-based filtering to avoid missing data between polls
+- **First Run**: Fetches historical data from the past interval (e.g., last 30 seconds)
+- **Subsequent Runs**: Fetches only new data since the last successful fetch
+- **InfluxDB 1.x**: 
+  - First run: `SELECT * FROM "measurement_name" WHERE time >= 'start_time' ORDER BY time ASC`
+  - Subsequent: `SELECT * FROM "measurement_name" WHERE time > 'last_fetch_time' ORDER BY time ASC`
+- **InfluxDB 2.x**: Similar time-based filtering with Flux queries
 
-#### 4. Data Conversion
+#### 4. Column Analysis and Metric Creation
+For each measurement, the receiver analyzes the data structure:
+- **Column Classification**: Identifies numeric columns (float64, int64, int, json.Number) vs string columns
+- **Metric Generation**: Creates one OpenTelemetry metric per numeric column
+- **Metric Naming**: Uses pattern `measurement_name_column_name` (e.g., `cpu_usage_value`)
+- **Attribute Mapping**: String columns become metric attributes (tags)
+- **Timestamp Handling**: Uses InfluxDB's time column as metric timestamp
+
+#### 5. Data Conversion
 Converts InfluxDB data points to OpenTelemetry metrics:
-- **Field Values** → **Metric Values**
-- **Tags** → **Attributes**
-- **Timestamp** → **Metric Timestamp**
-- **Measurement Name** → **Metric Name**
+- **Numeric Columns** → **Metric Values** (one metric per column)
+- **String Columns** → **Attributes** (tags)
+- **Time Column** → **Metric Timestamp**
+- **Measurement + Column Name** → **Metric Name**
 
 #### 5. Pipeline Integration
 - Sends converted metrics to the OpenTelemetry processing pipeline
@@ -509,18 +521,159 @@ Converts InfluxDB data points to OpenTelemetry metrics:
 The receiver supports automatic measurement discovery, which is enabled by default. When `auto_discover: true`:
 
 1. **Measurement Discovery**: The receiver runs `SHOW MEASUREMENTS` (InfluxDB 1.x) or `schema.measurements()` (InfluxDB 2.x) to discover all available measurements
-2. **Latest Metrics**: For each discovered measurement, it fetches the latest data point using:
-   - InfluxDB 1.x: `SELECT * FROM "measurement_name" ORDER BY time DESC LIMIT 1`
-   - InfluxDB 2.x: `from(bucket:"bucket") |> range(start: -1h) |> filter(fn: (r) => r["_measurement"] == "measurement_name") |> last()`
 
-This approach ensures you get the most recent metrics from all measurements without needing to specify custom queries.
+2. **Incremental Data Fetching**: For each discovered measurement, it uses time-based filtering:
+   - **First Run**: Fetches historical data from the past interval to avoid missing metrics
+   - **Subsequent Runs**: Fetches only new data since the last successful fetch
+   - **Query Examples**:
+     - InfluxDB 1.x: `SELECT * FROM "measurement_name" WHERE time >= 'start_time' ORDER BY time ASC`
+     - InfluxDB 2.x: Similar time-based filtering with Flux queries
+
+3. **Column Analysis**: For each measurement, analyzes the data structure:
+   - **Numeric Columns**: Identifies float64, int64, int, and json.Number types as potential metric values
+   - **String Columns**: Identifies string types as potential attributes
+   - **Metric Creation**: Creates one OpenTelemetry metric per numeric column
+
+4. **Metric Naming Convention**: Uses the pattern `measurement_name_column_name`
+   - Example: A measurement named `cpu_usage` with a column `value` becomes metric `cpu_usage_value`
+   - Example: A measurement named `disk_stats` with columns `read_bytes` and `write_bytes` creates two metrics: `disk_stats_read_bytes` and `disk_stats_write_bytes`
+
+This approach ensures comprehensive metric collection without missing data between polling intervals.
 
 ### Performance Considerations
 
 - **Polling Interval**: Configure based on your data update frequency (default: 30s)
-- **Data Volume**: The receiver fetches only the latest data point per measurement
-- **Network Efficiency**: Uses efficient queries to minimize data transfer
+- **Incremental Fetching**: Only fetches new data since the last successful poll, reducing data transfer
+- **Column Analysis**: Analyzes measurement structure once per measurement to optimize metric creation
 - **Memory Usage**: Processes one measurement at a time to control memory consumption
+- **Network Efficiency**: Uses time-based filtering to minimize query results and network overhead
+- **Metric Generation**: Creates metrics efficiently by processing all numeric columns in a single pass
+
+### Metric Type Classification
+
+The receiver automatically classifies metrics into appropriate OpenTelemetry metric types:
+
+#### Automatic Classification Rules
+- **Counters**: Fields ending with `_total`, `_count`, `_requests_total`, `_errors_total`, `_operations_total`, `_events_total`, `_packets_total`, `_connections_total`, `_sessions_total`
+- **Gauges**: All other numeric fields (default)
+- **Histograms**: Fields ending with `_bucket`, `_sum`, `_quantile`
+
+#### Conservative Approach
+The receiver uses a conservative classification strategy to avoid incorrect metric type assignment:
+- Only fields with explicit counter patterns are classified as counters
+- Prevents common issues like `_bytes` fields being incorrectly classified as counters
+- Reduces backend errors related to unsupported metric types
+
+#### Data Type Handling
+The receiver handles various InfluxDB data types robustly:
+- **Numeric Types**: float64, int64, int, json.Number
+- **String Types**: Converted to metric attributes
+- **Null Values**: Converted to 0 for numeric fields to prevent metric creation failures
+- **Boolean Values**: Converted to 0/1 for numeric representation
+- **Timestamp Handling**: Uses InfluxDB's time column as metric timestamp with proper parsing
+
+### Receiver Telemetry Metrics
+
+The InfluxDB Reader Receiver produces its own telemetry metrics to monitor its performance and health. These metrics are sent through the OpenTelemetry pipeline and can be used to monitor the receiver's operation.
+
+#### Available Telemetry Metrics
+
+| Metric Name | Type | Description | Unit |
+|-------------|------|-------------|------|
+| `influxdbreader.measurements.discovered` | Counter | Number of measurements discovered by the receiver | 1 |
+| `influxdbreader.metrics.converted` | Counter | Number of metrics successfully converted from InfluxDB | 1 |
+| `influxdbreader.metrics.dropped` | Counter | Number of metrics dropped due to errors or invalid data | 1 |
+| `influxdbreader.queries.executed` | Counter | Number of queries executed against InfluxDB | 1 |
+| `influxdbreader.queries.errors` | Counter | Number of query errors encountered | 1 |
+
+#### Metric Details
+
+**`influxdbreader.measurements.discovered`**
+- **Purpose**: Tracks how many InfluxDB measurements the receiver has discovered
+- **Use Case**: Monitor the scope of data being processed
+- **Expected Behavior**: Should increase over time as new measurements are discovered
+- **Troubleshooting**: If this doesn't increase, check InfluxDB connectivity and permissions
+
+**`influxdbreader.metrics.converted`**
+- **Purpose**: Counts successfully converted metrics from InfluxDB to OpenTelemetry format
+- **Use Case**: Monitor the volume of data being processed
+- **Expected Behavior**: Should increase with each successful polling cycle
+- **Troubleshooting**: If this is low compared to discovered measurements, check data format compatibility
+
+**`influxdbreader.metrics.dropped`**
+- **Purpose**: Counts metrics that were dropped due to errors or invalid data
+- **Use Case**: Monitor data quality and processing errors
+- **Expected Behavior**: Should remain low in normal operation
+- **Troubleshooting**: High values indicate data format issues or conversion problems
+
+**`influxdbreader.queries.executed`**
+- **Purpose**: Tracks the number of queries executed against InfluxDB
+- **Use Case**: Monitor database load and query frequency
+- **Expected Behavior**: Should increase with each polling cycle
+- **Troubleshooting**: If this doesn't increase, check polling configuration and connectivity
+
+**`influxdbreader.queries.errors`**
+- **Purpose**: Counts query errors encountered during operation
+- **Use Case**: Monitor database connectivity and query health
+- **Expected Behavior**: Should remain low in normal operation
+- **Troubleshooting**: High values indicate database connectivity issues or query problems
+
+#### Telemetry Metric Configuration
+
+The telemetry metrics are automatically generated and sent through the OpenTelemetry pipeline. They use **non-monotonic counters** to ensure compatibility with various backends that may not support monotonic cumulative sums.
+
+**Aggregation Temporality**: The telemetry metrics are compatible with both Delta and Cumulative aggregation temporality, with the format determined by the collector's telemetry configuration.
+
+#### Example Telemetry Dashboard Queries
+
+**Grafana/Prometheus:**
+```promql
+# Rate of metrics being converted
+rate(influxdbreader_metrics_converted_total[5m])
+
+# Error rate
+rate(influxdbreader_queries_errors_total[5m])
+
+# Discovery rate
+rate(influxdbreader_measurements_discovered_total[5m])
+
+# Conversion efficiency
+influxdbreader_metrics_converted_total / (influxdbreader_measurements_discovered_total)
+```
+
+**Monitoring Alerts:**
+```yaml
+# High error rate alert
+- alert: InfluxDBReaderHighErrorRate
+  expr: rate(influxdbreader_queries_errors_total[5m]) > 0.1
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: "InfluxDB Reader has high error rate"
+
+# No metrics being converted
+- alert: InfluxDBReaderNoMetrics
+  expr: rate(influxdbreader_metrics_converted_total[5m]) == 0
+  for: 5m
+  labels:
+    severity: critical
+  annotations:
+    summary: "InfluxDB Reader is not converting any metrics"
+```
+
+#### Resource Attributes
+
+All telemetry metrics include the following resource attributes:
+- `service.name`: "influxdbreader"
+- `service.version`: "0.2.8"
+- `service.instance.id`: "influxdbreader-receiver"
+
+#### Scope Information
+
+Telemetry metrics are emitted with the following scope:
+- `scope.name`: "influxdbreader"
+- `scope.version`: "0.2.8"
 
 ### Manual Query Mode
 
