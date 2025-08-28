@@ -272,6 +272,7 @@ receivers:
     timeout: "30s"                # Request timeout
     insecure: false               # Skip TLS verification
     use_v2_api: false             # Use InfluxDB 2.x API (default: false for 1.x)
+    prefix: ""                    # Prefix to prepend to all metric names (optional)
 ```
 
 ### Configuration Parameters
@@ -296,6 +297,7 @@ receivers:
 - **timeout** (optional): Request timeout. Default: `30s`
 - **insecure** (optional): Skip TLS verification. Default: `false`
 - **use_v2_api** (optional): Use InfluxDB 2.x API. Default: `false`
+- **prefix** (optional): Prefix to prepend to all metric names. If empty, no prefix is added. Default: `""`
 
 #### Metric Type Configuration
 - **metric_types** (optional): Simplified configuration for automatic metric type detection
@@ -338,6 +340,7 @@ receivers:
     database: "telegraf"
     interval: "30s"
     auto_discover: true  # Automatically discover all measurements
+    prefix: "prod"       # Optional: prepend "prod_" to all metric names
 ```
 
 ### InfluxDB 2.x Configuration
@@ -537,6 +540,7 @@ The receiver supports automatic measurement discovery, which is enabled by defau
 4. **Metric Naming Convention**: Uses the pattern `measurement_name_column_name`
    - Example: A measurement named `cpu_usage` with a column `value` becomes metric `cpu_usage_value`
    - Example: A measurement named `disk_stats` with columns `read_bytes` and `write_bytes` creates two metrics: `disk_stats_read_bytes` and `disk_stats_write_bytes`
+   - **Prefix Support**: If a `prefix` is configured, it will be prepended to all metric names (e.g., `prod_cpu_usage_value` with prefix `prod`)
 
 This approach ensures comprehensive metric collection without missing data between polling intervals.
 
@@ -580,39 +584,39 @@ The InfluxDB Reader Receiver produces its own telemetry metrics to monitor its p
 
 | Metric Name | Type | Description | Unit |
 |-------------|------|-------------|------|
-| `influxdbreader.measurements.discovered` | Counter | Number of measurements discovered by the receiver | 1 |
-| `influxdbreader.metrics.converted` | Counter | Number of metrics successfully converted from InfluxDB | 1 |
-| `influxdbreader.metrics.dropped` | Counter | Number of metrics dropped due to errors or invalid data | 1 |
-| `influxdbreader.queries.executed` | Counter | Number of queries executed against InfluxDB | 1 |
-| `influxdbreader.queries.errors` | Counter | Number of query errors encountered | 1 |
+| `otelcol_receiver_influxdbreader_measurements_discovered` | Counter | Number of measurements discovered by the receiver | 1 |
+| `otelcol_receiver_influxdbreader_metrics_converted` | Counter | Number of metrics successfully converted from InfluxDB | 1 |
+| `otelcol_receiver_influxdbreader_metrics_dropped` | Counter | Number of metrics dropped due to errors or invalid data | 1 |
+| `otelcol_receiver_influxdbreader_queries_executed` | Counter | Number of queries executed against InfluxDB | 1 |
+| `otelcol_receiver_influxdbreader_queries_errors` | Counter | Number of query errors encountered | 1 |
 
 #### Metric Details
 
-**`influxdbreader.measurements.discovered`**
+**`otelcol_receiver_influxdbreader_measurements_discovered`**
 - **Purpose**: Tracks how many InfluxDB measurements the receiver has discovered
 - **Use Case**: Monitor the scope of data being processed
 - **Expected Behavior**: Should increase over time as new measurements are discovered
 - **Troubleshooting**: If this doesn't increase, check InfluxDB connectivity and permissions
 
-**`influxdbreader.metrics.converted`**
+**`otelcol_receiver_influxdbreader_metrics_converted`**
 - **Purpose**: Counts successfully converted metrics from InfluxDB to OpenTelemetry format
 - **Use Case**: Monitor the volume of data being processed
 - **Expected Behavior**: Should increase with each successful polling cycle
 - **Troubleshooting**: If this is low compared to discovered measurements, check data format compatibility
 
-**`influxdbreader.metrics.dropped`**
+**`otelcol_receiver_influxdbreader_metrics_dropped`**
 - **Purpose**: Counts metrics that were dropped due to errors or invalid data
 - **Use Case**: Monitor data quality and processing errors
 - **Expected Behavior**: Should remain low in normal operation
 - **Troubleshooting**: High values indicate data format issues or conversion problems
 
-**`influxdbreader.queries.executed`**
+**`otelcol_receiver_influxdbreader_queries_executed`**
 - **Purpose**: Tracks the number of queries executed against InfluxDB
 - **Use Case**: Monitor database load and query frequency
 - **Expected Behavior**: Should increase with each polling cycle
 - **Troubleshooting**: If this doesn't increase, check polling configuration and connectivity
 
-**`influxdbreader.queries.errors`**
+**`otelcol_receiver_influxdbreader_queries_errors`**
 - **Purpose**: Counts query errors encountered during operation
 - **Use Case**: Monitor database connectivity and query health
 - **Expected Behavior**: Should remain low in normal operation
@@ -629,23 +633,23 @@ The telemetry metrics are automatically generated and sent through the OpenTelem
 **Grafana/Prometheus:**
 ```promql
 # Rate of metrics being converted
-rate(influxdbreader_metrics_converted_total[5m])
+rate(otelcol_receiver_influxdbreader_metrics_converted_total[5m])
 
 # Error rate
-rate(influxdbreader_queries_errors_total[5m])
+rate(otelcol_receiver_influxdbreader_queries_errors_total[5m])
 
 # Discovery rate
-rate(influxdbreader_measurements_discovered_total[5m])
+rate(otelcol_receiver_influxdbreader_measurements_discovered_total[5m])
 
 # Conversion efficiency
-influxdbreader_metrics_converted_total / (influxdbreader_measurements_discovered_total)
+otelcol_receiver_influxdbreader_metrics_converted_total / (otelcol_receiver_influxdbreader_measurements_discovered_total)
 ```
 
 **Monitoring Alerts:**
 ```yaml
 # High error rate alert
 - alert: InfluxDBReaderHighErrorRate
-  expr: rate(influxdbreader_queries_errors_total[5m]) > 0.1
+  expr: rate(otelcol_receiver_influxdbreader_queries_errors_total[5m]) > 0.1
   for: 2m
   labels:
     severity: warning
@@ -654,7 +658,7 @@ influxdbreader_metrics_converted_total / (influxdbreader_measurements_discovered
 
 # No metrics being converted
 - alert: InfluxDBReaderNoMetrics
-  expr: rate(influxdbreader_metrics_converted_total[5m]) == 0
+  expr: rate(otelcol_receiver_influxdbreader_metrics_converted_total[5m]) == 0
   for: 5m
   labels:
     severity: critical

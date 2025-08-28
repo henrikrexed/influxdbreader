@@ -106,6 +106,14 @@ func (r *influxdbReaderReceiver) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// applyMetricPrefix applies the configured prefix to a metric name
+func (r *influxdbReaderReceiver) applyMetricPrefix(metricName string) string {
+	if r.config.Prefix == "" {
+		return metricName
+	}
+	return fmt.Sprintf("%s_%s", r.config.Prefix, metricName)
+}
+
 // createTelemetryMetrics creates and sends telemetry metrics about the receiver's performance
 func (r *influxdbReaderReceiver) createTelemetryMetrics(ctx context.Context) {
 	metrics := pmetric.NewMetrics()
@@ -123,7 +131,7 @@ func (r *influxdbReaderReceiver) createTelemetryMetrics(ctx context.Context) {
 
 	// Measurements discovered metric (Counter - non-monotonic for compatibility)
 	measurementsMetric := scopeMetrics.Metrics().AppendEmpty()
-	measurementsMetric.SetName("influxdbreader.measurements.discovered")
+	measurementsMetric.SetName("otelcol_receiver_influxdbreader_measurements_discovered")
 	measurementsMetric.SetDescription("Number of measurements discovered by the receiver")
 	measurementsMetric.SetUnit("1")
 	dp := measurementsMetric.SetEmptySum().DataPoints().AppendEmpty()
@@ -133,7 +141,7 @@ func (r *influxdbReaderReceiver) createTelemetryMetrics(ctx context.Context) {
 
 	// Metrics converted metric (Counter - non-monotonic for compatibility)
 	convertedMetric := scopeMetrics.Metrics().AppendEmpty()
-	convertedMetric.SetName("influxdbreader.metrics.converted")
+	convertedMetric.SetName("otelcol_receiver_influxdbreader_metrics_converted")
 	convertedMetric.SetDescription("Number of metrics successfully converted from InfluxDB")
 	convertedMetric.SetUnit("1")
 	dp = convertedMetric.SetEmptySum().DataPoints().AppendEmpty()
@@ -143,7 +151,7 @@ func (r *influxdbReaderReceiver) createTelemetryMetrics(ctx context.Context) {
 
 	// Metrics dropped metric (Counter - non-monotonic for compatibility)
 	droppedMetric := scopeMetrics.Metrics().AppendEmpty()
-	droppedMetric.SetName("influxdbreader.metrics.dropped")
+	droppedMetric.SetName("otelcol_receiver_influxdbreader_metrics_dropped")
 	droppedMetric.SetDescription("Number of metrics dropped due to errors or invalid data")
 	droppedMetric.SetUnit("1")
 	dp = droppedMetric.SetEmptySum().DataPoints().AppendEmpty()
@@ -153,7 +161,7 @@ func (r *influxdbReaderReceiver) createTelemetryMetrics(ctx context.Context) {
 
 	// Queries executed metric (Counter - non-monotonic for compatibility)
 	queriesMetric := scopeMetrics.Metrics().AppendEmpty()
-	queriesMetric.SetName("influxdbreader.queries.executed")
+	queriesMetric.SetName("otelcol_receiver_influxdbreader_queries_executed")
 	queriesMetric.SetDescription("Number of queries executed against InfluxDB")
 	queriesMetric.SetUnit("1")
 	dp = queriesMetric.SetEmptySum().DataPoints().AppendEmpty()
@@ -163,7 +171,7 @@ func (r *influxdbReaderReceiver) createTelemetryMetrics(ctx context.Context) {
 
 	// Query errors metric (Counter - non-monotonic for compatibility)
 	errorsMetric := scopeMetrics.Metrics().AppendEmpty()
-	errorsMetric.SetName("influxdbreader.queries.errors")
+	errorsMetric.SetName("otelcol_receiver_influxdbreader_queries_errors")
 	errorsMetric.SetDescription("Number of query errors encountered")
 	errorsMetric.SetUnit("1")
 	dp = errorsMetric.SetEmptySum().DataPoints().AppendEmpty()
@@ -375,7 +383,8 @@ func (r *influxdbReaderReceiver) fetchV2Metrics(ctx context.Context) pmetric.Met
 		record := result.Record()
 
 		metric := scopeMetrics.Metrics().AppendEmpty()
-		metric.SetName(record.Measurement())
+		metricName := r.applyMetricPrefix(record.Measurement())
+		metric.SetName(metricName)
 
 		// Determine metric type based on configuration
 		metricTypeInfo := r.determineMetricType(record.Measurement(), record.Field())
@@ -582,6 +591,7 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 				// Create one metric per numeric column
 				for _, numericColumn := range numericColumns {
 					metricName := fmt.Sprintf("%s_%s", measurement, numericColumn)
+					metricName = r.applyMetricPrefix(metricName)
 					metric := scopeMetrics.Metrics().AppendEmpty()
 					metric.SetName(metricName)
 					metric.SetDescription(fmt.Sprintf("Metric %s from InfluxDB measurement: %s", numericColumn, measurement))
@@ -955,10 +965,11 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 				zap.Any("tags", record.Values()))
 
 			metric := scopeMetrics.Metrics().AppendEmpty()
-			metric.SetName(record.Measurement())
+			metricName := r.applyMetricPrefix(record.Measurement())
+			metric.SetName(metricName)
 
 			r.telemetry.Logger.Debug("Created metric",
-				zap.String("metricName", record.Measurement()),
+				zap.String("metricName", metricName),
 				zap.String("field", record.Field()),
 				zap.Any("value", record.Value()))
 
@@ -966,7 +977,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 			metricTypeInfo := r.determineMetricType(record.Measurement(), record.Field())
 
 			r.telemetry.Logger.Debug("Determined metric type",
-				zap.String("metricName", record.Measurement()),
+				zap.String("metricName", metricName),
 				zap.String("field", record.Field()),
 				zap.String("metricType", string(metricTypeInfo.Type)),
 				zap.Bool("isCumulative", metricTypeInfo.IsCumulative),
@@ -982,7 +993,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp.SetDoubleValue(v)
 						metric.Sum().SetIsMonotonic(true)
 						r.telemetry.Logger.Debug("Created counter data point",
-							zap.String("metricName", record.Measurement()),
+							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Float64("value", v))
 					case MetricTypeHistogram:
@@ -990,7 +1001,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp.SetSum(v)
 						dp.SetCount(1)
 						r.telemetry.Logger.Debug("Created histogram data point",
-							zap.String("metricName", record.Measurement()),
+							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Float64("sum", v),
 							zap.Uint64("count", 1))
@@ -998,7 +1009,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
 						dp.SetDoubleValue(v)
 						r.telemetry.Logger.Debug("Created gauge data point",
-							zap.String("metricName", record.Measurement()),
+							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Float64("value", v))
 					}
@@ -1009,7 +1020,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp.SetIntValue(v)
 						metric.Sum().SetIsMonotonic(true)
 						r.telemetry.Logger.Debug("Created counter data point",
-							zap.String("metricName", record.Measurement()),
+							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Int64("value", v))
 					case MetricTypeHistogram:
@@ -1017,7 +1028,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp.SetSum(float64(v))
 						dp.SetCount(1)
 						r.telemetry.Logger.Debug("Created histogram data point",
-							zap.String("metricName", record.Measurement()),
+							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Float64("sum", float64(v)),
 							zap.Uint64("count", 1))
@@ -1025,7 +1036,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
 						dp.SetIntValue(v)
 						r.telemetry.Logger.Debug("Created gauge data point",
-							zap.String("metricName", record.Measurement()),
+							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Int64("value", v))
 					}
@@ -1037,7 +1048,7 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 						dp.SetIntValue(0)
 					}
 					r.telemetry.Logger.Debug("Created boolean gauge data point",
-						zap.String("metricName", record.Measurement()),
+						zap.String("metricName", metricName),
 						zap.String("field", record.Field()),
 						zap.Bool("value", v),
 						zap.Int64("intValue", func() int64 {

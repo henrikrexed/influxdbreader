@@ -79,6 +79,9 @@ type Config struct {
 
 	// Simplified metric type configuration
 	MetricTypes *SimplifiedMetricTypeConfig `mapstructure:"metric_types"`
+
+	// Prefix to prepend to all metric names (optional)
+	Prefix string `mapstructure:"prefix"`
 }
 
 // MetricTypeMappingConfig defines how to map InfluxDB measurements to OpenTelemetry metric types
