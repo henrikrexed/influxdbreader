@@ -171,12 +171,13 @@ jobs:
       security-events: write
       actions: read
       contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Run OSS Scorecard
-        uses: ossf/scorecard-action@v2.3.1
+        uses: ossf/scorecard-action@v2.4.1
         with:
           results_file: results.sarif
           results_format: sarif
