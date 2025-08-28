@@ -175,14 +175,16 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Run OSS Scorecard
         uses: ossf/scorecard-action@v2.4.1
         with:
           results_file: results.sarif
           results_format: sarif
-          # Publish results to GitHub's security dashboard
-          publish_results: true
+          # Temporarily disable publishing to debug
+          publish_results: false
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v3
