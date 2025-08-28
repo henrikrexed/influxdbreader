@@ -63,10 +63,10 @@ jobs:
       - name: Build Docker image
         run: make docker-build
 
-      - name: Generate SBOM
+      - name: Generate SBOM from local image
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          image: hrexed/collector-influxdbreader:latest
           format: spdx-json
           output-file: sbom.spdx.json
 
