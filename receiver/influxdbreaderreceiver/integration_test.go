@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.uber.org/zap"
 )
@@ -34,9 +35,11 @@ func TestIntegration_WithRealInfluxDB(t *testing.T) {
 	}
 
 	consumer := &consumertest.MetricsSink{}
-	logger := zap.NewNop()
+	telemetry := component.TelemetrySettings{
+		Logger: zap.NewNop(),
+	}
 
-	receiver := newInfluxDBReaderReceiver(config, consumer, logger)
+	receiver := newInfluxDBReaderReceiver(config, consumer, telemetry)
 
 	// Start the receiver
 	ctx := context.Background()
@@ -155,9 +158,11 @@ func TestIntegration_ReceiverLifecycle(t *testing.T) {
 	}
 
 	consumer := &consumertest.MetricsSink{}
-	logger := zap.NewNop()
+	telemetry := component.TelemetrySettings{
+		Logger: zap.NewNop(),
+	}
 
-	receiver := newInfluxDBReaderReceiver(config, consumer, logger)
+	receiver := newInfluxDBReaderReceiver(config, consumer, telemetry)
 
 	// Test that the receiver is created correctly
 	assert.NotNil(t, receiver)

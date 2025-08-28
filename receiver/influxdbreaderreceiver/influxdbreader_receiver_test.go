@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
 	"go.uber.org/zap"
 )
 
@@ -21,9 +22,11 @@ func TestNewInfluxDBReaderReceiver(t *testing.T) {
 	}
 
 	consumer := &mockConsumer{}
-	logger := zap.NewNop()
+	telemetry := component.TelemetrySettings{
+		Logger: zap.NewNop(),
+	}
 
-	receiver := newInfluxDBReaderReceiver(config, consumer, logger)
+	receiver := newInfluxDBReaderReceiver(config, consumer, telemetry)
 
 	assert.NotNil(t, receiver)
 
@@ -43,9 +46,11 @@ func TestInfluxDBReaderReceiver_Start_Shutdown(t *testing.T) {
 	}
 
 	consumer := &mockConsumer{}
-	logger := zap.NewNop()
+	telemetry := component.TelemetrySettings{
+		Logger: zap.NewNop(),
+	}
 
-	receiver := newInfluxDBReaderReceiver(config, consumer, logger)
+	receiver := newInfluxDBReaderReceiver(config, consumer, telemetry)
 
 	// Mock the host
 	host := &mockHost{}
@@ -213,9 +218,11 @@ func TestInfluxDBReaderReceiver_ContextCancellation(t *testing.T) {
 	}
 
 	consumer := &mockConsumer{}
-	logger := zap.NewNop()
+	telemetry := component.TelemetrySettings{
+		Logger: zap.NewNop(),
+	}
 
-	receiver := newInfluxDBReaderReceiver(config, consumer, logger)
+	receiver := newInfluxDBReaderReceiver(config, consumer, telemetry)
 
 	// Create a context that will be cancelled
 	ctx, cancel := context.WithCancel(context.Background())
