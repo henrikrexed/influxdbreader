@@ -2,8 +2,6 @@ module github.com/henrikrexed/influxdbreader
 
 go 1.24
 
-replace github.com/henrikrexed/influxdbreader => ./
-
 require (
 	github.com/influxdata/influxdb-client-go/v2 v2.12.3
 	github.com/influxdata/influxdb1-client v0.0.0-20220302092344-a9ab5670611c
