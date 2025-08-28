@@ -67,7 +67,7 @@ func (r *influxdbReaderReceiver) determineMetricType(measurement, field string) 
 	}
 
 	// Use default type - be conservative and default to gauge for InfluxDB data
-	defaultType := MetricTypeGauge
+	var defaultType MetricType
 	if r.config.MetricTypeMapping.DefaultType != "" {
 		defaultType = MetricType(r.config.MetricTypeMapping.DefaultType)
 	} else {
