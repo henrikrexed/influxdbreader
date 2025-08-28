@@ -15,7 +15,7 @@ import (
 func TestNewFactory(t *testing.T) {
 	factory := NewFactory()
 	assert.NotNil(t, factory)
-	assert.Equal(t, component.Type(TypeStr), factory.Type())
+	assert.Equal(t, component.MustNewType(TypeStr), factory.Type())
 }
 
 func TestCreateDefaultConfig(t *testing.T) {
@@ -47,14 +47,14 @@ func TestCreateMetricsReceiver(t *testing.T) {
 	consumer := &mockConsumer{}
 
 	// Create receiver settings
-	settings := receiver.CreateSettings{
-		ID:                component.NewID(TypeStr),
+	settings := receiver.Settings{
+		ID:                component.MustNewID(TypeStr),
 		TelemetrySettings: component.TelemetrySettings{Logger: zap.NewNop()},
 		BuildInfo:         component.BuildInfo{},
 	}
 
 	// Create the receiver
-	receiver, err := factory.CreateMetricsReceiver(context.Background(), settings, cfg, consumer)
+	receiver, err := factory.CreateMetrics(context.Background(), settings, cfg, consumer)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, receiver)
@@ -70,15 +70,15 @@ func TestCreateMetricsReceiver_InvalidConfig(t *testing.T) {
 	consumer := &mockConsumer{}
 
 	// Create receiver settings
-	settings := receiver.CreateSettings{
-		ID:                component.NewID(TypeStr),
+	settings := receiver.Settings{
+		ID:                component.MustNewID(TypeStr),
 		TelemetrySettings: component.TelemetrySettings{Logger: zap.NewNop()},
 		BuildInfo:         component.BuildInfo{},
 	}
 
 	// Create the receiver - should panic due to type assertion
 	assert.Panics(t, func() {
-		_, _ = factory.CreateMetricsReceiver(context.Background(), settings, cfg, consumer)
+		_, _ = factory.CreateMetrics(context.Background(), settings, cfg, consumer)
 	})
 }
 
@@ -87,14 +87,14 @@ func TestCreateMetricsReceiver_NilConsumer(t *testing.T) {
 	cfg := factory.CreateDefaultConfig()
 
 	// Create receiver settings
-	settings := receiver.CreateSettings{
-		ID:                component.NewID(TypeStr),
+	settings := receiver.Settings{
+		ID:                component.MustNewID(TypeStr),
 		TelemetrySettings: component.TelemetrySettings{Logger: zap.NewNop()},
 		BuildInfo:         component.BuildInfo{},
 	}
 
 	// Create the receiver with nil consumer
-	receiver, err := factory.CreateMetricsReceiver(context.Background(), settings, cfg, nil)
+	receiver, err := factory.CreateMetrics(context.Background(), settings, cfg, nil)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, receiver)

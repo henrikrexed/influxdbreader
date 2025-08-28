@@ -78,9 +78,9 @@ test-coverage: deps
 	@echo "Coverage report generated: coverage.html"
 
 # Run linter
-lint: deps
+lint: deps install-tools
 	@echo "Running linter..."
-	~/go/bin/golangci-lint run
+	$(shell go env GOPATH)/bin/golangci-lint run
 
 # Clean build artifacts
 clean:
