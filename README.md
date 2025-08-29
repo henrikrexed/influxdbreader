@@ -62,22 +62,22 @@ The InfluxDB Reader Receiver is designed to **read existing metrics from InfluxD
 
 #### Automatic Metric Type Detection
 
-The receiver supports intelligent metric type mapping based on common naming conventions:
+The receiver uses a **conservative approach** aligned with the Prometheus InfluxDB exporter, primarily creating gauges by default:
 
-- **Counters**: Often end with `_total`, `_count`, or `_bytes` (e.g., `http_requests_total`, `errors_count`)
-- **Gauges**: Usually descriptive names like `cpu_usage`, `memory_free`, `temperature`
-- **Histograms**: Typically have suffixes like `_bucket`, `_sum`, `_quantile` (e.g., `response_time_bucket`)
+- **Counters**: Only very specific patterns like `_requests_total`, `_errors_total`, `_operations_total`, `_events_total` (e.g., `http_requests_total`, `api_errors_total`)
+- **Gauges**: **Default for most measurements** - descriptive names like `cpu_usage`, `memory_free`, `temperature`, `disk_usage`
+- **Histograms**: Patterns ending with `_bucket`, `_sum`, `_quantile` (e.g., `response_time_bucket`)
 
-The receiver automatically detects these patterns and maps them to the appropriate OpenTelemetry metric types.
+This conservative approach prevents incorrect metric type classification and reduces backend compatibility issues.
 
 #### InfluxDB vs OpenTelemetry Metric Types
 
 | InfluxDB Data | OpenTelemetry Output | Notes |
 |---------------|---------------------|-------|
-| Cumulative metrics (e.g., counters) | Counter (Cumulative) | Proper counter type with cumulative flag |
-| Delta metrics (e.g., rate changes) | Gauge | Current value at polling time |
-| Gauge metrics | Gauge | Direct conversion |
-| Histograms | Histogram | Proper histogram type with buckets |
+| Most InfluxDB measurements | Gauge | Default conservative approach (like Prometheus InfluxDB exporter) |
+| Clear cumulative patterns (e.g., `_requests_total`) | Counter (Cumulative) | Only for very specific counter patterns |
+| Histogram patterns (e.g., `_bucket`, `_sum`) | Histogram | Proper histogram type with buckets |
+| All other numeric data | Gauge | Safe default for point-in-time values |
 
 #### Configuration-Based Type Mapping
 
@@ -95,7 +95,7 @@ metric_types:
     cpu_usage: "gauge"
     http_requests_total: "counter"
   
-  # Default type when auto-detection fails
+  # Default type when auto-detection fails (conservative gauge-first approach)
   default_type: "gauge"
 ```
 
@@ -115,9 +115,21 @@ metric_type_mapping:
       is_cumulative: true
       is_monotonic: true
   
-  # Field name pattern rules (regex)
+  # Field name pattern rules (regex) - very conservative counter patterns
   field_rules:
-    - field_pattern: ".*_total$"
+    - field_pattern: ".*_requests_total$"
+      metric_type: "counter"
+      is_cumulative: true
+      is_monotonic: true
+    - field_pattern: ".*_errors_total$"
+      metric_type: "counter"
+      is_cumulative: true
+      is_monotonic: true
+    - field_pattern: ".*_operations_total$"
+      metric_type: "counter"
+      is_cumulative: true
+      is_monotonic: true
+    - field_pattern: ".*_events_total$"
       metric_type: "counter"
       is_cumulative: true
       is_monotonic: true
@@ -140,32 +152,32 @@ metric_type_mapping:
 
 #### Why This Matters
 
-- **Cumulative Metrics**: With proper metric type mapping, cumulative counters (like `cpu_usage_total`) are converted to OpenTelemetry Sum metrics with the cumulative flag, preserving their counter nature.
-- **Delta Metrics**: Delta metrics (like rate changes) are converted to gauges showing the current rate value.
-- **Proper Type Preservation**: The receiver now preserves the semantic meaning of your metrics, making downstream processing more accurate.
-- **Reduced Processing Overhead**: No need for post-processing to convert gauge values back to counters.
+- **Conservative Approach**: Following Prometheus InfluxDB exporter patterns, most metrics default to gauges, which is safer for point-in-time InfluxDB data.
+- **Reduced Backend Errors**: Conservative counter classification prevents `UNSUPPORTED_METRIC_TYPE_MONOTONIC_CUMULATIVE_SUM` errors.
+- **Accurate Type Classification**: Only very specific cumulative patterns are classified as counters, reducing misclassification.
+- **Better Compatibility**: Gauge-first approach works better with most observability backends and processing pipelines.
 
 #### Example Scenarios
 
-**Scenario 1: Cumulative Counters**
+**Scenario 1: Conservative Counter Classification**
 ```yaml
 # InfluxDB stores: http_requests_total = 1500 (cumulative)
-# Receiver outputs: Counter metric with cumulative=true, monotonic=true
-# Result: Proper counter type preserved
+# Receiver outputs: Counter metric (only for very specific patterns)
+# Result: Proper counter type for clear cumulative data
 ```
 
-**Scenario 2: Gauge Metrics**
+**Scenario 2: Default Gauge Metrics (Most Common)**
 ```yaml
 # InfluxDB stores: cpu_usage = 75.2 (current usage percentage)
-# Receiver outputs: Gauge metric
-# Result: Proper gauge type for current values
+# Receiver outputs: Gauge metric (default for most measurements)
+# Result: Safe gauge type for point-in-time values
 ```
 
-**Scenario 3: Histogram Data**
+**Scenario 3: Conservative Pattern Matching**
 ```yaml
-# InfluxDB stores: response_time_bucket with buckets [0.1, 0.5, 1.0, 2.0]
-# Receiver outputs: Histogram metric with proper bucket structure
-# Result: Proper histogram type for distribution data
+# InfluxDB stores: disk_io_bytes = 1024000 (current bytes)
+# Receiver outputs: Gauge metric (not classified as counter despite _bytes suffix)
+# Result: Prevents incorrect counter classification
 ```
 
 #### Recommended Processors
@@ -558,15 +570,16 @@ This approach ensures comprehensive metric collection without missing data betwe
 The receiver automatically classifies metrics into appropriate OpenTelemetry metric types:
 
 #### Automatic Classification Rules
-- **Counters**: Fields ending with `_total`, `_count`, `_requests_total`, `_errors_total`, `_operations_total`, `_events_total`, `_packets_total`, `_connections_total`, `_sessions_total`
-- **Gauges**: All other numeric fields (default)
+- **Counters**: Only very specific patterns like `_requests_total`, `_errors_total`, `_operations_total`, `_events_total`, `_packets_total`, `_connections_total`, `_sessions_total`, `_calls_total`, `_transactions_total`, `_messages_total`
+- **Gauges**: **Default for most measurements** - all other numeric fields
 - **Histograms**: Fields ending with `_bucket`, `_sum`, `_quantile`
 
 #### Conservative Approach
-The receiver uses a conservative classification strategy to avoid incorrect metric type assignment:
-- Only fields with explicit counter patterns are classified as counters
-- Prevents common issues like `_bytes` fields being incorrectly classified as counters
-- Reduces backend errors related to unsupported metric types
+The receiver uses a **very conservative classification strategy** aligned with the Prometheus InfluxDB exporter:
+- **Gauge-first approach**: Most InfluxDB measurements default to gauges
+- **Specific counter patterns**: Only very clear cumulative patterns are classified as counters
+- **Prevents misclassification**: Common patterns like `_bytes`, `_total`, `_count` are NOT automatically classified as counters
+- **Reduces backend errors**: Significantly reduces `UNSUPPORTED_METRIC_TYPE_MONOTONIC_CUMULATIVE_SUM` errors
 
 #### Data Type Handling
 The receiver handles various InfluxDB data types robustly:

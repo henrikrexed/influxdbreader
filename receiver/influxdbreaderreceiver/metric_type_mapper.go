@@ -23,8 +23,9 @@ type MetricTypeInfo struct {
 }
 
 // determineMetricType determines the OpenTelemetry metric type for a given measurement and field
+// Following Prometheus InfluxDB exporter: primarily creates gauges, only uses counter for very clear cumulative patterns
 func (r *influxdbReaderReceiver) determineMetricType(measurement, field string) MetricTypeInfo {
-	// Default to gauge if no mapping is configured
+	// Default to gauge if no mapping is configured (following Prometheus InfluxDB exporter approach)
 	if r.config.MetricTypeMapping == nil {
 		return MetricTypeInfo{
 			Type:         MetricTypeGauge,
@@ -71,14 +72,14 @@ func (r *influxdbReaderReceiver) determineMetricType(measurement, field string) 
 	if r.config.MetricTypeMapping.DefaultType != "" {
 		defaultType = MetricType(r.config.MetricTypeMapping.DefaultType)
 	} else {
-		// For InfluxDB data, be more conservative about counter detection
-		// Only classify as counter if we're very confident it's cumulative
-		if isDefinitelyCounter(measurement) || isDefinitelyCounter(field) {
+		// Following Prometheus InfluxDB exporter: primarily use gauges, only use counter for very clear cumulative patterns
+		if isDefinitelyCounter(measurement) && isDefinitelyCounter(field) {
+			// Only use counter if BOTH measurement and field are clearly counters
 			defaultType = MetricTypeCounter
 		} else if isLikelyHistogram(measurement) || isLikelyHistogram(field) {
 			defaultType = MetricTypeHistogram
 		} else {
-			// Default to gauge for most InfluxDB measurements
+			// Default to gauge for most InfluxDB measurements (like Prometheus InfluxDB exporter)
 			defaultType = MetricTypeGauge
 		}
 	}
@@ -91,6 +92,7 @@ func (r *influxdbReaderReceiver) determineMetricType(measurement, field string) 
 }
 
 // createMetricTypeMapping creates a default metric type mapping configuration
+// Following Prometheus conventions for metric type classification
 func createDefaultMetricTypeMapping() *MetricTypeMappingConfig {
 	return &MetricTypeMappingConfig{
 		DefaultType: "gauge",
@@ -122,20 +124,33 @@ func createDefaultMetricTypeMapping() *MetricTypeMappingConfig {
 			},
 		},
 		FieldRules: []FieldRule{
-			// Counter field patterns (end with _total, _count)
-			// Note: Removed _bytes pattern as it's too aggressive for InfluxDB data
+			// Very specific counter field patterns (following Prometheus InfluxDB exporter conservatism)
 			{
-				FieldPattern: ".*_total$",
+				FieldPattern: ".*_requests_total$",
 				MetricType:   "counter",
 				IsCumulative: true,
 				IsMonotonic:  true,
 			},
 			{
-				FieldPattern: ".*_count$",
+				FieldPattern: ".*_errors_total$",
 				MetricType:   "counter",
 				IsCumulative: true,
 				IsMonotonic:  true,
 			},
+			{
+				FieldPattern: ".*_operations_total$",
+				MetricType:   "counter",
+				IsCumulative: true,
+				IsMonotonic:  true,
+			},
+			{
+				FieldPattern: ".*_events_total$",
+				MetricType:   "counter",
+				IsCumulative: true,
+				IsMonotonic:  true,
+			},
+			// Note: Removed general _total and _count patterns to be more conservative
+			// Most InfluxDB measurements are better treated as gauges
 			// Histogram field patterns (end with _bucket, _sum, _quantile)
 			{
 				FieldPattern: ".*_bucket$",
@@ -274,17 +289,18 @@ func isLikelyCounter(name string) bool {
 }
 
 // isDefinitelyCounter checks if a measurement/field name is definitely a counter
-// This is more conservative than isLikelyCounter and only matches clear cumulative patterns
+// Following Prometheus InfluxDB exporter conservatism - only very clear cumulative patterns
 func isDefinitelyCounter(name string) bool {
 	name = strings.ToLower(name)
-	// Only match very specific patterns that are almost certainly cumulative counters
-	definiteCounterPatterns := []string{
+	// Very specific counter patterns - only patterns that are almost certainly cumulative
+	counterPatterns := []string{
 		"_requests_total", "_errors_total", "_operations_total", "_events_total",
-		"total_requests", "total_errors", "total_operations", "total_events",
-		"_packets_total", "_connections_total", "_sessions_total",
+		"_packets_total", "_connections_total", "_sessions_total", "_calls_total",
+		"_transactions_total", "_messages_total",
+		"requests_total", "errors_total", "operations_total", "events_total",
 	}
 
-	for _, pattern := range definiteCounterPatterns {
+	for _, pattern := range counterPatterns {
 		if strings.Contains(name, pattern) {
 			return true
 		}
