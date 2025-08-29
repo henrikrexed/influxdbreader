@@ -280,7 +280,7 @@ func (r *influxdbReaderReceiver) initV1Client() error {
 		return err
 	}
 
-	r.telemetry.Logger.Info("Successfully connected to InfluxDB 1.x server")
+	r.telemetry.Logger.Debug("Successfully connected to InfluxDB 1.x server")
 	return nil
 }
 
@@ -395,33 +395,61 @@ func (r *influxdbReaderReceiver) fetchV2Metrics(ctx context.Context) pmetric.Met
 			case float64:
 				switch metricTypeInfo.Type {
 				case MetricTypeCounter:
-					dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptySum()
+						metric.Sum().SetIsMonotonic(true)
+					}
+					dp := metric.Sum().DataPoints().AppendEmpty()
 					dp.SetDoubleValue(v)
-					metric.Sum().SetIsMonotonic(true)
 				case MetricTypeHistogram:
-					dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptyHistogram()
+					}
+					dp := metric.Histogram().DataPoints().AppendEmpty()
 					dp.SetSum(v)
 					dp.SetCount(1)
 				default: // MetricTypeGauge or unknown
-					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptyGauge()
+					}
+					dp := metric.Gauge().DataPoints().AppendEmpty()
 					dp.SetDoubleValue(v)
 				}
 			case int64:
 				switch metricTypeInfo.Type {
 				case MetricTypeCounter:
-					dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptySum()
+						metric.Sum().SetIsMonotonic(true)
+					}
+					dp := metric.Sum().DataPoints().AppendEmpty()
 					dp.SetIntValue(v)
-					metric.Sum().SetIsMonotonic(true)
 				case MetricTypeHistogram:
-					dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptyHistogram()
+					}
+					dp := metric.Histogram().DataPoints().AppendEmpty()
 					dp.SetSum(float64(v))
 					dp.SetCount(1)
 				default: // MetricTypeGauge or unknown
-					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptyGauge()
+					}
+					dp := metric.Gauge().DataPoints().AppendEmpty()
 					dp.SetIntValue(v)
 				}
 			case bool:
-				dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+				// Only set the metric type once, then append data points
+				if metric.Type() == pmetric.MetricTypeEmpty {
+					metric.SetEmptyGauge()
+				}
+				dp := metric.Gauge().DataPoints().AppendEmpty()
 				if v {
 					dp.SetIntValue(1)
 				} else {
@@ -471,7 +499,7 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 
 	// Update telemetry metrics
 	atomic.AddInt64(&r.measurementsDiscovered, int64(len(measurements)))
-	r.telemetry.Logger.Info("Discovered measurements", zap.Int("count", len(measurements)))
+	r.telemetry.Logger.Debug("Discovered measurements", zap.Int("count", len(measurements)))
 
 	// For each measurement, fetch data since last fetch time
 	// Track the latest timestamp across all measurements for next fetch
@@ -536,80 +564,91 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 
 		// Process results for this measurement
 		seriesCount := 0
+		totalDataPoints := 0
+		r.telemetry.Logger.Debug("Processing V1 measurement results",
+			zap.String("measurement", measurement),
+			zap.Int("resultCount", len(response.Results)))
+
+		// Analyze columns to identify numeric vs string columns
+		var numericColumns []string
+		var stringColumns []string
+
+		// Use the first series to determine column structure
+		if len(response.Results) > 0 && len(response.Results[0].Series) > 0 {
+			firstSeries := response.Results[0].Series[0]
+			if len(firstSeries.Values) > 0 {
+				firstRow := firstSeries.Values[0]
+				for i, value := range firstRow {
+					if i < len(firstSeries.Columns) {
+						columnName := firstSeries.Columns[i]
+						if columnName == "time" {
+							continue // Skip time column
+						}
+
+						switch v := value.(type) {
+						case float64, int64, int:
+							numericColumns = append(numericColumns, columnName)
+						case string:
+							stringColumns = append(stringColumns, columnName)
+						case json.Number:
+							// json.Number represents numeric values in InfluxDB 1.x
+							numericColumns = append(numericColumns, columnName)
+						default:
+							// Try to convert to number if it's a json.Number string
+							if str, ok := v.(string); ok {
+								if _, err := strconv.ParseFloat(str, 64); err == nil {
+									numericColumns = append(numericColumns, columnName)
+								} else {
+									stringColumns = append(stringColumns, columnName)
+								}
+							} else {
+								stringColumns = append(stringColumns, columnName)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		r.telemetry.Logger.Debug("Column analysis for measurement",
+			zap.String("measurement", measurement),
+			zap.Strings("numericColumns", numericColumns),
+			zap.Strings("stringColumns", stringColumns))
+
+		// Create a map to track metrics by their unique identifier (name + attributes)
+		// This ensures we accumulate data points within the same metric
+		metricMap := make(map[string]pmetric.Metric)
+
+		// Process all results and series to add data points to the appropriate metrics
 		for _, result := range response.Results {
+			r.telemetry.Logger.Debug("Processing V1 result",
+				zap.String("measurement", measurement),
+				zap.Int("seriesCount", len(result.Series)))
+
 			for _, series := range result.Series {
 				seriesCount++
+				totalDataPoints += len(series.Values)
 				r.telemetry.Logger.Debug("Processing V1 series",
 					zap.String("measurement", measurement),
 					zap.String("seriesName", series.Name),
 					zap.Int("seriesIndex", seriesCount),
 					zap.Strings("columns", series.Columns),
-					zap.Int("pointCount", len(series.Values)))
+					zap.Int("pointCount", len(series.Values)),
+					zap.Any("tags", series.Tags))
 
-				// Analyze columns to identify numeric vs string columns
-				var numericColumns []string
-				var stringColumns []string
-
-				if len(series.Values) > 0 {
-					firstRow := series.Values[0]
-					for i, value := range firstRow {
-						if i < len(series.Columns) {
-							columnName := series.Columns[i]
-							if columnName == "time" {
-								continue // Skip time column
-							}
-
-							switch v := value.(type) {
-							case float64, int64, int:
-								numericColumns = append(numericColumns, columnName)
-							case string:
-								stringColumns = append(stringColumns, columnName)
-							case json.Number:
-								// json.Number represents numeric values in InfluxDB 1.x
-								numericColumns = append(numericColumns, columnName)
-							default:
-								// Try to convert to number if it's a json.Number string
-								if str, ok := v.(string); ok {
-									if _, err := strconv.ParseFloat(str, 64); err == nil {
-										numericColumns = append(numericColumns, columnName)
-									} else {
-										stringColumns = append(stringColumns, columnName)
-									}
-								} else {
-									stringColumns = append(stringColumns, columnName)
-								}
-							}
-						}
-					}
-				}
-
-				r.telemetry.Logger.Debug("Column analysis for measurement",
-					zap.String("measurement", measurement),
-					zap.Strings("numericColumns", numericColumns),
-					zap.Strings("stringColumns", stringColumns))
-
-				// Create one metric per numeric column
+				// Process each numeric column for this series
 				for _, numericColumn := range numericColumns {
-					metricName := fmt.Sprintf("%s_%s", measurement, numericColumn)
-					metricName = r.applyMetricPrefix(metricName)
-					metric := scopeMetrics.Metrics().AppendEmpty()
-					metric.SetName(metricName)
-					metric.SetDescription(fmt.Sprintf("Metric %s from InfluxDB measurement: %s", numericColumn, measurement))
-
-					// Determine metric type based on the measurement name
 					metricTypeInfo := r.determineMetricType(measurement, numericColumn)
-
-					// Track metric creation for telemetry
-					atomic.AddInt64(&r.metricsConverted, 1)
-
-					r.telemetry.Logger.Debug("Creating metric for numeric column",
-						zap.String("measurement", measurement),
-						zap.String("numericColumn", numericColumn),
-						zap.String("metricName", metricName),
-						zap.String("metricType", string(metricTypeInfo.Type)))
 
 					// Process each point in the series
 					pointCount := 0
+					dataPointsCreated := 0
+					r.telemetry.Logger.Debug("Processing data points for series",
+						zap.String("measurement", measurement),
+						zap.String("numericColumn", numericColumn),
+						zap.Int("totalPoints", len(series.Values)),
+						zap.Any("seriesTags", series.Tags))
+
 					for _, point := range series.Values {
 						pointCount++
 						if len(point) < 2 {
@@ -665,15 +704,87 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 							}
 						}
 
+						// Build unique metric identifier based on measurement, column, and attributes
+						// Extract attributes from string columns and series tags
+						r.telemetry.Logger.Debug("Starting map-based metric creation",
+							zap.String("measurement", measurement),
+							zap.String("numericColumn", numericColumn),
+							zap.Int("pointIndex", pointCount))
+
+						attributes := make(map[string]string)
+
+						// Add attributes from string columns
+						for _, stringColumn := range stringColumns {
+							for i, colName := range series.Columns {
+								if colName == stringColumn && i < len(point) {
+									if val, ok := point[i].(string); ok {
+										attributes[stringColumn] = val
+									}
+								}
+							}
+						}
+
+						// Add attributes from series tags
+						for tagKey, tagValue := range series.Tags {
+							attributes[tagKey] = tagValue
+						}
+
+						// Create unique metric key
+						metricKey := fmt.Sprintf("%s_%s", measurement, numericColumn)
+						for k, v := range attributes {
+							metricKey += fmt.Sprintf("_%s_%s", k, v)
+						}
+
+						r.telemetry.Logger.Debug("Generated metric key",
+							zap.String("measurement", measurement),
+							zap.String("numericColumn", numericColumn),
+							zap.String("metricKey", metricKey),
+							zap.Any("attributes", attributes))
+
+						// Get or create metric
+						metric, exists := metricMap[metricKey]
+						if !exists {
+							metricName := fmt.Sprintf("%s_%s", measurement, numericColumn)
+							metricName = r.applyMetricPrefix(metricName)
+							metric = scopeMetrics.Metrics().AppendEmpty()
+							metric.SetName(metricName)
+							metric.SetDescription(fmt.Sprintf("Metric %s from InfluxDB measurement: %s", numericColumn, measurement))
+							metricMap[metricKey] = metric
+
+							// Track metric creation for telemetry
+							atomic.AddInt64(&r.metricsConverted, 1)
+
+							r.telemetry.Logger.Debug("Created new metric for unique combination",
+								zap.String("measurement", measurement),
+								zap.String("numericColumn", numericColumn),
+								zap.String("metricKey", metricKey),
+								zap.String("metricName", metricName),
+								zap.String("metricType", string(metricTypeInfo.Type)),
+								zap.Any("attributes", attributes))
+						}
+
 						// Parse value from the specific numeric column
 						var dataPoint pmetric.NumberDataPoint
 						switch metricTypeInfo.Type {
 						case MetricTypeCounter:
-							dp := metric.SetEmptySum().DataPoints().AppendEmpty()
-							metric.Sum().SetIsMonotonic(true)
+							// Only set the metric type once, then append data points
+							if metric.Type() == pmetric.MetricTypeEmpty {
+								metric.SetEmptySum()
+								metric.Sum().SetIsMonotonic(true)
+							}
+							dp := metric.Sum().DataPoints().AppendEmpty()
 							dataPoint = dp
+							r.telemetry.Logger.Debug("Created V1 counter data point",
+								zap.String("measurement", measurement),
+								zap.String("numericColumn", numericColumn),
+								zap.Int("pointIndex", pointCount),
+								zap.Int("totalDataPoints", metric.Sum().DataPoints().Len()))
 						case MetricTypeHistogram:
-							dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+							// Only set the metric type once, then append data points
+							if metric.Type() == pmetric.MetricTypeEmpty {
+								metric.SetEmptyHistogram()
+							}
+							dp := metric.Histogram().DataPoints().AppendEmpty()
 							// For now, we'll create a simple histogram from a single value
 							if val, ok := point[columnIndex].(float64); ok {
 								dp.SetSum(val)
@@ -686,8 +797,17 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 							}
 							continue // Skip the regular data point creation for histograms
 						default: // MetricTypeGauge or unknown
-							dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+							// Only set the metric type once, then append data points
+							if metric.Type() == pmetric.MetricTypeEmpty {
+								metric.SetEmptyGauge()
+							}
+							dp := metric.Gauge().DataPoints().AppendEmpty()
 							dataPoint = dp
+							r.telemetry.Logger.Debug("Created V1 gauge data point",
+								zap.String("measurement", measurement),
+								zap.String("numericColumn", numericColumn),
+								zap.Int("pointIndex", pointCount),
+								zap.Int("totalDataPoints", metric.Gauge().DataPoints().Len()))
 						}
 
 						// Set value from the specific numeric column
@@ -751,15 +871,26 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 								zap.String("numericColumn", numericColumn))
 						}
 
-						// Set attributes from string columns (tags)
+						// Set attributes from series tags (InfluxDB 1.x tags)
 						attributeCount := 0
+						for tagKey, tagValue := range series.Tags {
+							dataPoint.Attributes().PutStr(tagKey, tagValue)
+							attributeCount++
+							r.telemetry.Logger.Debug("Set V1 metric attribute from series tag",
+								zap.String("measurement", measurement),
+								zap.String("numericColumn", numericColumn),
+								zap.String("attributeKey", tagKey),
+								zap.String("attributeValue", tagValue))
+						}
+
+						// Set attributes from string columns (field values)
 						for i, column := range series.Columns {
 							if i < len(point) && column != "time" && column != numericColumn {
 								// Only add string values as attributes
 								if val, ok := point[i].(string); ok {
 									dataPoint.Attributes().PutStr(column, val)
 									attributeCount++
-									r.telemetry.Logger.Debug("Set V1 metric attribute",
+									r.telemetry.Logger.Debug("Set V1 metric attribute from field",
 										zap.String("measurement", measurement),
 										zap.String("numericColumn", numericColumn),
 										zap.String("attributeKey", column),
@@ -775,6 +906,7 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 							}
 						}
 
+						dataPointsCreated++
 						r.telemetry.Logger.Debug("Completed V1 data point creation for column",
 							zap.String("measurement", measurement),
 							zap.String("numericColumn", numericColumn),
@@ -782,14 +914,15 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 							zap.Int("attributeCount", attributeCount))
 					}
 
-					r.telemetry.Logger.Debug("Added V1 metric to resource",
+					r.telemetry.Logger.Debug("Processed V1 data point",
 						zap.String("measurement", measurement),
 						zap.String("numericColumn", numericColumn),
-						zap.String("metricName", metricName),
-						zap.String("metricType", string(metricTypeInfo.Type)))
+						zap.String("metricType", string(metricTypeInfo.Type)),
+						zap.Int("dataPointsCreated", dataPointsCreated),
+						zap.Any("seriesTags", series.Tags))
 				}
 			}
-		}
+		} // End of result loop
 
 		// Track the latest timestamp from this measurement
 		for _, result := range response.Results {
@@ -810,8 +943,9 @@ func (r *influxdbReaderReceiver) fetchV1MetricsWithDiscovery(ctx context.Context
 
 		r.telemetry.Logger.Debug("V1 measurement processing completed",
 			zap.String("measurement", measurement),
-			zap.Int("seriesCount", seriesCount))
-	}
+			zap.Int("seriesCount", seriesCount),
+			zap.Int("totalDataPoints", totalDataPoints))
+	} // End of measurement loop
 
 	// Update the last fetch time for next iteration
 	if !latestTimestamp.IsZero() {
@@ -898,7 +1032,7 @@ func (r *influxdbReaderReceiver) describeMeasurementStructure(ctx context.Contex
 
 // fetchV2MetricsWithDiscovery discovers all measurements and fetches latest metrics for each
 func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context) pmetric.Metrics {
-	r.telemetry.Logger.Info("Starting V2 metrics discovery and fetch")
+	r.telemetry.Logger.Debug("Starting V2 metrics discovery and fetch")
 
 	metrics := pmetric.NewMetrics()
 	resourceMetrics := metrics.ResourceMetrics().AppendEmpty()
@@ -989,15 +1123,23 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 				case float64:
 					switch metricTypeInfo.Type {
 					case MetricTypeCounter:
-						dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+						// Only set the metric type once, then append data points
+						if metric.Type() == pmetric.MetricTypeEmpty {
+							metric.SetEmptySum()
+							metric.Sum().SetIsMonotonic(true)
+						}
+						dp := metric.Sum().DataPoints().AppendEmpty()
 						dp.SetDoubleValue(v)
-						metric.Sum().SetIsMonotonic(true)
 						r.telemetry.Logger.Debug("Created counter data point",
 							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Float64("value", v))
 					case MetricTypeHistogram:
-						dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+						// Only set the metric type once, then append data points
+						if metric.Type() == pmetric.MetricTypeEmpty {
+							metric.SetEmptyHistogram()
+						}
+						dp := metric.Histogram().DataPoints().AppendEmpty()
 						dp.SetSum(v)
 						dp.SetCount(1)
 						r.telemetry.Logger.Debug("Created histogram data point",
@@ -1006,7 +1148,11 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 							zap.Float64("sum", v),
 							zap.Uint64("count", 1))
 					default: // MetricTypeGauge or unknown
-						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+						// Only set the metric type once, then append data points
+						if metric.Type() == pmetric.MetricTypeEmpty {
+							metric.SetEmptyGauge()
+						}
+						dp := metric.Gauge().DataPoints().AppendEmpty()
 						dp.SetDoubleValue(v)
 						r.telemetry.Logger.Debug("Created gauge data point",
 							zap.String("metricName", metricName),
@@ -1016,15 +1162,23 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 				case int64:
 					switch metricTypeInfo.Type {
 					case MetricTypeCounter:
-						dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+						// Only set the metric type once, then append data points
+						if metric.Type() == pmetric.MetricTypeEmpty {
+							metric.SetEmptySum()
+							metric.Sum().SetIsMonotonic(true)
+						}
+						dp := metric.Sum().DataPoints().AppendEmpty()
 						dp.SetIntValue(v)
-						metric.Sum().SetIsMonotonic(true)
 						r.telemetry.Logger.Debug("Created counter data point",
 							zap.String("metricName", metricName),
 							zap.String("field", record.Field()),
 							zap.Int64("value", v))
 					case MetricTypeHistogram:
-						dp := metric.SetEmptyHistogram().DataPoints().AppendEmpty()
+						// Only set the metric type once, then append data points
+						if metric.Type() == pmetric.MetricTypeEmpty {
+							metric.SetEmptyHistogram()
+						}
+						dp := metric.Histogram().DataPoints().AppendEmpty()
 						dp.SetSum(float64(v))
 						dp.SetCount(1)
 						r.telemetry.Logger.Debug("Created histogram data point",
@@ -1033,7 +1187,11 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 							zap.Float64("sum", float64(v)),
 							zap.Uint64("count", 1))
 					default: // MetricTypeGauge or unknown
-						dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+						// Only set the metric type once, then append data points
+						if metric.Type() == pmetric.MetricTypeEmpty {
+							metric.SetEmptyGauge()
+						}
+						dp := metric.Gauge().DataPoints().AppendEmpty()
 						dp.SetIntValue(v)
 						r.telemetry.Logger.Debug("Created gauge data point",
 							zap.String("metricName", metricName),
@@ -1041,7 +1199,11 @@ func (r *influxdbReaderReceiver) fetchV2MetricsWithDiscovery(ctx context.Context
 							zap.Int64("value", v))
 					}
 				case bool:
-					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptyGauge()
+					}
+					dp := metric.Gauge().DataPoints().AppendEmpty()
 					if v {
 						dp.SetIntValue(1)
 					} else {
@@ -1179,7 +1341,7 @@ func (r *influxdbReaderReceiver) discoverV1Measurements(ctx context.Context) ([]
 		}
 	}
 
-	r.telemetry.Logger.Info("V1 measurements discovery completed successfully",
+	r.telemetry.Logger.Debug("V1 measurements discovery completed successfully",
 		zap.String("database", r.config.Database),
 		zap.Int("measurementCount", len(measurements)))
 
@@ -1338,7 +1500,11 @@ func (r *influxdbReaderReceiver) fetchV1Metrics(ctx context.Context) pmetric.Met
 
 				// Parse value
 				if value, ok := point[1].(float64); ok {
-					dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+					// Only set the metric type once, then append data points
+					if metric.Type() == pmetric.MetricTypeEmpty {
+						metric.SetEmptyGauge()
+					}
+					dp := metric.Gauge().DataPoints().AppendEmpty()
 					dp.SetDoubleValue(value)
 
 					r.telemetry.Logger.Debug("Created V1 gauge data point",
@@ -1380,7 +1546,7 @@ func (r *influxdbReaderReceiver) fetchV1Metrics(ctx context.Context) pmetric.Met
 		}
 	}
 
-	r.telemetry.Logger.Info("V1 metrics fetch completed",
+	r.telemetry.Logger.Debug("V1 metrics fetch completed",
 		zap.Int("seriesCount", seriesCount),
 		zap.Int("totalMetrics", metrics.MetricCount()),
 		zap.Int("resourceCount", metrics.ResourceMetrics().Len()))
